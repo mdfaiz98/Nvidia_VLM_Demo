@@ -1,0 +1,688 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advantech Live VLM</title>
+
+    <!-- Favicons -->
+    <link rel="icon" type="image/svg+xml" href="favicon/favicon.svg">
+    <link rel="icon" type="image/x-icon" href="favicon/favicon.ico">
+    <link rel="icon" type="image/png" sizes="96x96" href="favicon/favicon-96x96.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="favicon/apple-touch-icon.png">
+    <link rel="manifest" href="favicon/site.webmanifest">
+
+    <link rel="stylesheet" href="/style.css">
+
+    <!-- Lucide Icons - Load before body scripts -->
+    <script src="/vendor/lucide.min.js"></script>
+    <!-- Markdown rendering libraries -->
+    <script src="/vendor/marked.min.js"></script>
+    <script src="/vendor/purify.min.js"></script>
+    <!-- Motion (spring/animation engine) - sets window.Motion -->
+    <script src="/vendor/motion.min.js"></script>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <div class="logo" style="display: flex; align-items: center;">
+                <img src="/images/advantech-logo.png" alt="Advantech" style="height: 70px; width: auto; display: block; margin: -13px 0;">
+            </div>
+            <div class="title-section">
+                <h1>Live VLM</h1>
+                <div class="subtitle">Real-time Vision Language Model Evaluation Tool</div>
+            </div>
+        </div>
+        <div class="header-right">
+            <span class="status-badge disconnected" id="connectionStatus">Disconnected</span>
+            <button class="settings-btn" id="helpBtn" title="Guided tour of the UI">
+                <i data-lucide="help-circle"></i>
+            </button>
+            <button class="settings-btn" id="settingsBtn" title="Settings">
+                <i data-lucide="settings"></i>
+            </button>
+            <button class="theme-toggle" id="themeToggle">
+                <span id="themeIcon">
+                    <i data-lucide="moon"></i>
+                </span>
+                <span id="themeText">Dark</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="settings-modal" id="settingsModal">
+        <div class="settings-dialog">
+            <div class="settings-header">
+                <div class="settings-title">
+                    <i data-lucide="settings"></i> Settings
+                </div>
+                <button class="settings-close" id="settingsClose">×</button>
+            </div>
+            <div class="settings-body">
+                <!-- Column 1: Layout & Visual Effects -->
+                <div>
+                    <div class="settings-section">
+                        <div class="settings-section-title">Layout</div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Main Content Order</div>
+                                <div class="settings-item-description">Choose which element appears at the top</div>
+                            </div>
+                            <select id="layoutOrder" class="settings-select">
+                                <option value="video-first">Camera → VLM Output Info</option>
+                                <option value="vlm-first" selected>VLM Output Info → Camera</option>
+                            </select>
+                        </div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">VLM Output on Camera View</div>
+                                <div class="settings-item-description">Show text overlay directly on video feed</div>
+                            </div>
+                            <select id="overlayPosition" class="settings-select">
+                                <option value="none">None</option>
+                                <option value="top">At the top</option>
+                                <option value="bottom">At the bottom</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <div class="settings-section-title">Visual Effects</div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Pop-in Animation</div>
+                                <div class="settings-item-description">Scale animation when new VLM response arrives</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="popInToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Accent Glow Effect</div>
+                                <div class="settings-item-description">Border glow on new VLM response</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="glowToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Fade Effect</div>
+                                <div class="settings-item-description">Gradually fade response after 2 seconds</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="fadeToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Column 2: Input Colors & WebRTC -->
+                <div>
+                    <div class="settings-section">
+                        <div class="settings-section-title">Visual Style</div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Colorful UI Accents</div>
+                                <div class="settings-item-description">Color-coded icons and input focus glows</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="colorfulFocusToggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <div class="settings-section-title">WebRTC</div>
+
+                        <div class="settings-item">
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="settings-item-label">Max Video Latency (seconds)</div>
+                                <div class="settings-item-description">Drop old frames if delay exceeds this (0 = no intervention)</div>
+                            </div>
+                            <input type="number" id="maxLatency" value="0" min="0" max="10.0" step="0.1" style="width: 80px; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-primary); color: var(--text-primary); font-size: 14px;">
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <div class="settings-section-title">GPU Monitoring</div>
+
+                        <div class="settings-item">
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="settings-item-label">Graph Update Interval (seconds)</div>
+                                <div class="settings-item-description">How often to update GPU/CPU graphs (lower = more responsive, higher = less CPU usage)</div>
+                            </div>
+                            <input type="number" id="gpuUpdateInterval" value="0.25" min="0.1" max="5.0" step="0.05" style="width: 80px; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-primary); color: var(--text-primary); font-size: 14px;">
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <div class="settings-section-title">Debug</div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Show request payload</div>
+                                <div class="settings-item-description">Include request JSON (image + prompt) under the prompt area; collapsed by default</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="debugShowRequestPayload">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="settings-item">
+                            <div>
+                                <div class="settings-item-label">Show response payload</div>
+                                <div class="settings-item-description">Include API response JSON under the VLM output; collapsed by default</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="debugShowResponsePayload">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Guided Tour Overlay -->
+    <div class="tour-overlay" id="tourOverlay">
+        <div class="tour-highlight" id="tourHighlight"></div>
+        <div class="tour-tooltip" id="tourTooltip">
+            <div class="tour-tooltip-header">
+                <span class="tour-step-count" id="tourStepCount">Step 1 of 7</span>
+                <button class="tour-skip" id="tourSkipBtn">Skip tour ×</button>
+            </div>
+            <div class="tour-tooltip-title" id="tourTitle"></div>
+            <div class="tour-tooltip-body" id="tourBody"></div>
+            <div class="tour-tooltip-footer">
+                <button class="tour-btn tour-btn-secondary" id="tourBackBtn">
+                    <i data-lucide="chevron-left"></i> Back
+                </button>
+                <button class="tour-btn tour-btn-primary" id="tourNextBtn">
+                    Next <i data-lucide="chevron-right"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Left Sidebar -->
+        <div class="sidebar" id="controlDrawer">
+            <div class="drawer-latch" id="drawerLatch" onclick="toggleSidebarDrawer()" title="Collapse panel">
+                <i id="drawerLatchIcon" data-lucide="chevron-right"></i>
+            </div>
+            <div class="drawer-rail" id="drawerRail">
+                <div class="drawer-rail-icon" onclick="expandDrawerToPanel('vlmConfig')" title="VLM API Configuration">
+                    <i data-lucide="globe"></i>
+                </div>
+                <div class="drawer-rail-icon" onclick="expandDrawerToPanel('cameraConfig')" title="Video Source">
+                    <i data-lucide="video"></i>
+                </div>
+                <div class="drawer-rail-icon" onclick="expandDrawerToPanel('promptEditor')" title="Prompt Editor">
+                    <i data-lucide="edit-3"></i>
+                </div>
+            </div>
+            <div class="drawer-content" id="drawerContent">
+            <!-- VLM API Configuration -->
+            <div class="panel">
+                <div class="panel-header" onclick="togglePanel('vlmConfig')">
+                    <div class="panel-title">
+                        <span class="panel-icon">
+                            <i data-lucide="globe"></i>
+                        </span>
+                        VLM API Configuration
+                    </div>
+                    <i class="panel-toggle" id="vlmConfigToggle" data-lucide="chevron-down"></i>
+                </div>
+                <div class="panel-content" id="vlmConfig">
+                    <div class="form-group">
+                        <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 8px;">
+                            <label style="margin-bottom: 0; flex: 1;">API Base URL</label>
+                            <div style="position: relative;">
+                                <button class="icon-btn" id="apiPresetsBtn" title="Select preset API endpoint">
+                                    <i data-lucide="clipboard"></i>
+                                </button>
+                                <div id="apiPresetsMenu" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 4px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: var(--radius-md); box-shadow: var(--card-shadow); min-width: 280px; z-index: 9999;">
+                                    <div style="padding: 8px 0;">
+                                        <div class="api-preset-item" data-url="http://localhost:11434/v1">
+                                            <strong>Ollama</strong><br>
+                                            <span style="font-size: 11px; color: var(--text-muted);">http://localhost:11434/v1</span>
+                                        </div>
+                                        <div class="api-preset-item" data-url="http://localhost:8000/v1">
+                                            <strong>vLLM</strong><br>
+                                            <span style="font-size: 11px; color: var(--text-muted);">http://localhost:8000/v1</span>
+                                        </div>
+                                        <div class="api-preset-item" data-url="http://localhost:30000/v1">
+                                            <strong>SGLang</strong><br>
+                                            <span style="font-size: 11px; color: var(--text-muted);">http://localhost:30000/v1</span>
+                                        </div>
+                                        <div style="border-top: 1px solid var(--border-color); margin: 4px 0;"></div>
+                                        <div class="api-preset-item" data-url="https://api.openai.com/v1">
+                                            <strong>OpenAI</strong><br>
+                                            <span style="font-size: 11px; color: var(--text-muted);">https://api.openai.com/v1</span>
+                                        </div>
+                                        <div class="api-preset-item" data-url="https://integrate.api.nvidia.com/v1">
+                                            <strong>NVIDIA API Catalog</strong><br>
+                                            <span style="font-size: 11px; color: var(--text-muted);">https://integrate.api.nvidia.com/v1</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <input type="text" id="apiBaseUrl" value="http://localhost:11434/v1" placeholder="http://localhost:8000/v1">
+                        <div class="input-hint" id="apiBaseHint">Select from presets or enter custom URL</div>
+                    </div>
+                    <div class="form-group" id="apiKeyGroup">
+                        <div style="display: flex; align-items: center; cursor: pointer; margin-bottom: 8px;" onclick="toggleApiKeyField()">
+                            <label style="margin-bottom: 0; flex: 1;">API Key (Optional)</label>
+                            <i id="apiKeyToggle" data-lucide="chevron-down" style="font-size: 12px; color: var(--text-secondary);"></i>
+                        </div>
+                        <div id="apiKeyField">
+                            <input type="text" id="apiKey" placeholder="sk-..." autocomplete="off">
+                            <div class="input-hint">Required for OpenAI and NVIDIA API Catalog, etc.</div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <label style="margin-bottom: 0;">Model Selection</label>
+                            <div style="display: flex; gap: 6px;">
+                                <button class="icon-btn" id="refreshModelsBtn" title="Refresh available models">
+                                    <i data-lucide="refresh-cw"></i>
+                                </button>
+                                <button class="icon-btn" id="downloadModelBtn" title="Download new model (coming soon)" disabled style="opacity: 0.5;">
+                                    <i data-lucide="plus"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <select id="modelSelect">
+                            <option value="">Loading models...</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Video Source -->
+            <div class="panel">
+                <div class="panel-header" onclick="togglePanel('cameraConfig')">
+                    <div class="panel-title">
+                        <span class="panel-icon">
+                            <i data-lucide="video"></i>
+                        </span>
+                        Video Source
+                    </div>
+                    <i class="panel-toggle" id="cameraConfigToggle" data-lucide="chevron-down"></i>
+                </div>
+                <div class="panel-content" id="cameraConfig">
+                    <!-- Input Source Tabs -->
+                    <div class="input-source-tabs">
+                        <button class="input-source-tab active" data-source="webcam">
+                            <i data-lucide="video" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                            Webcam
+                        </button>
+                        <button class="input-source-tab" data-source="rtsp" title="RTSP IP Camera (Beta - Tested with Reolink RLC-811A)">
+                            <i data-lucide="cast" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                            RTSP Stream
+                            <span class="beta-badge">BETA</span>
+                        </button>
+                        <button class="input-source-tab" data-source="videofile" title="Play a local video file instead of a live camera">
+                            <i data-lucide="file-video" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                            Video File
+                        </button>
+                    </div>
+
+                    <!-- Webcam Controls -->
+                    <div id="webcamControls">
+                        <div class="form-group">
+                            <label>Camera Selection</label>
+                            <select id="cameraSelect">
+                                <option value="">Detecting cameras...</option>
+                            </select>
+                            <div class="input-hint" style="margin-bottom: 11px;">Select camera device to use for VLM analysis</div>
+                        </div>
+                    </div>
+
+                    <!-- RTSP Controls -->
+                    <div id="rtspControls" style="display: none;">
+                        <div class="form-group">
+                            <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 8px;">
+                                <div class="tooltip-wrapper" style="margin-bottom: 0; flex: 1;">
+                                    <label style="margin-bottom: 0;">RTSP Stream URL</label>
+                                    <span class="tooltip-icon">ℹ</span>
+                                    <div class="tooltip-text">
+                                        <strong>Format:</strong> rtsp://[user:pass@]ip:port/path<br><br>
+                                        <strong>Examples:</strong><br>
+                                        • rtsp://192.168.1.100:554/stream<br>
+                                        • rtsp://admin:password@192.168.1.100:554/h264Preview_01_main
+                                    </div>
+                                </div>
+                                <button class="icon-btn" id="testRtspBtn" title="Test Connection">
+                                    <i data-lucide="test-tube-diagonal"></i>
+                                </button>
+                            </div>
+                            <input type="text" id="rtspUrl" placeholder="rtsp://192.168.1.100:554/stream" style="margin-bottom: 16px;">
+                            <div id="rtspStatus" class="input-hint" style="margin-top: -8px; margin-bottom: 12px; display: none;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Video File Controls -->
+                    <div id="videoFileControls" style="display: none;">
+                        <div class="form-group">
+                            <label>Video File</label>
+                            <input type="file" id="videoFileInput" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v" style="margin-bottom: 8px;">
+                            <div id="videoFileStatus" class="input-hint" style="margin-top: -4px; margin-bottom: 12px;">Select a video file to play instead of a live camera</div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <!-- RTSP Beta Warning (shown only when RTSP tab is active) -->
+                        <div id="rtspBetaWarning" class="input-hint" style="margin-top: 12px; color: var(--warning-color); display: none; align-items: center; gap: 4px;">
+                            <span><strong>Beta:</strong> Tested with Reolink RLC-811A. Other cameras may work. <a href="https://github.com/NVIDIA-AI-IOT/live-vlm-webui/blob/main/docs/usage/rtsp-ip-cameras.md" target="_blank" style="color: var(--warning-color); text-decoration: underline;">Learn more</a></span>
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label>Frame Processing Interval</label>
+                        <input type="number" id="processEvery" value="30" min="1" max="3600" step="1">
+                        <div class="input-hint">Process every Nth frame (Lower = more frequent)</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Prompt Editor -->
+            <div class="panel">
+                <div class="panel-header" onclick="togglePanel('promptEditor')">
+                    <div class="panel-title">
+                        <span class="panel-icon">
+                            <i data-lucide="edit-3"></i>
+                        </span>
+                        Prompt Editor
+                    </div>
+                    <i class="panel-toggle" id="promptEditorToggle" data-lucide="chevron-down"></i>
+                </div>
+                <div class="panel-content" id="promptEditor">
+                    <div class="form-group">
+                        <label>Quick Presets</label>
+                        <select id="promptPreset">
+                            <option value="">-- Select a preset --</option>
+                            <optgroup label="Scene Understanding">
+                                <option value="Describe what you see in this image.">🖼️ Scene Description</option>
+                                <option value="List up to 5 main objects you see in this image, separated by commas. No descriptions, just names.">📦 Object Detection</option>
+                                <option value="Describe the person's activity and what they are doing.">🏃 Activity Recognition</option>
+                                <option value="Describe the facial expressions and emotions of people visible.">🙂 Emotion Detection</option>
+                                <option value="Describe the scene for a visually impaired person, focusing on the most important details.">🦯 Accessibility</option>
+                                <option value="Read and transcribe any text visible in the image." data-skip-length="true">🔤 OCR / Text Reading</option>
+                                <option value="Answer with Yes or No only: Is there a person visible?">✅ Yes/No Question</option>
+                            </optgroup>
+                            <optgroup label="Monitoring Use Cases">
+                                <option value="Are there any safety hazards visible? Answer with 'ALERT: description' or 'SAFE'.">⚠️ Safety Monitoring</option>
+                                <option value="Is anyone in the water showing signs of distress, unresponsive, or submerged and not moving?">🏊 Pool Safety (Drowning Detection)</option>
+                                <option value="Has anyone fallen or is lying on the floor abnormally?">🧓 Elder Care (Fall Detection)</option>
+                                <option value="Describe any people, vehicles, or unusual/suspicious activity visible.">🔒 Security Monitoring</option>
+                                <option value="Describe customer traffic and any safety concerns visible.">🛒 Retail Monitoring</option>
+                                <option value="Are workers wearing required safety equipment and staying out of restricted areas?">🦺 Warehouse Safety</option>
+                                <option value="Is anyone visibly using a cell phone, and if so what are they doing with it (texting, calling, scrolling)?">📱 Cell Phone Usage Monitoring</option>
+                            </optgroup>
+                            <optgroup label="Robot Navigation">
+                            <option value="You are a robot. Describe what you see, then give 5 navigation commands to get to a possible location of a bathroom. Format: 'linear_x=0.3, angular_z=0.0 # reason'. Keep linear_x between -0.5 and 0.5, angular_z between -1.0 and 1.0." data-skip-length="true">🤖 Robot Navigation (Simple)</option>
+                            <option data-skip-length="true" value="You are controlling a mobile robot with differential drive. Camera: 1.0m height, forward-facing. Generate ROS cmd_vel commands based on what you see to get to a possible location of a bathroom.
+
+CRITICAL CONSTRAINTS:
+- linear.x: MUST be between -0.5 and +0.5 m/s (violations will cause robot damage)
+- angular.z: MUST be between -1.0 and +1.0 rad/s
+- Commands must respond to actual obstacles/scene content
+
+OUTPUT FORMAT (20 commands for 2.0 seconds):
+T=0.0s: linear.x=0.20, angular.z=0.00 # [explain what you see and why this velocity]
+T=0.1s: linear.x=0.18, angular.z=-0.15 # [explain decision based on scene]
+... (continue for all 20 timesteps)
+
+STRATEGY SECTION:
+After commands, explain: obstacles detected, clearance margins, goal inference, safety considerations.">🤖 Robot Navigation (ROS)</option>
+                            </optgroup>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Custom Prompt</label>
+                        <textarea id="promptText" placeholder="Enter your custom prompt here...">Describe what you see in this image.</textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Answer Length</label>
+                        <select id="answerLength">
+                            <option value="1-2" selected>1-2 sentences</option>
+                            <option value="3-4">3-4 sentences</option>
+                            <option value="4-5">4-5 sentences</option>
+                            <option value="none">No limit (Max Tokens only)</option>
+                        </select>
+                        <div class="input-hint" id="answerLengthHint">Baked into the prompt automatically — keeps answers short and avoids stalls on long generations.</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Max Tokens</label>
+                        <input type="number" id="maxTokens" value="512" min="1" max="4096" step="1">
+                        <div class="input-hint">Lower for short answers (Yes/No: ~10), higher for detailed descriptions</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="thinkingMode">Thinking</label>
+                        <select id="thinkingMode" disabled>
+                            <option value="">Model default</option>
+                            <option value="none">Off</option>
+                            <option value="low">On — Low</option>
+                            <option value="medium">On — Medium</option>
+                            <option value="high">On — High</option>
+                        </select>
+                        <div class="input-hint">Requires model and API support. Applies to the next request. Thinking On may need more Max Tokens.</div>
+                    </div>
+                </div>
+            </div>
+
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Video Feed -->
+            <div class="video-card" id="videoCard">
+                <!-- Big Start Button (centered overlay) -->
+                <button id="bigStartBtn" class="big-start-btn" onclick="start()">
+                    <i data-lucide="play"></i>
+                    Start
+                </button>
+
+                <!-- Small Stop Button (top-left corner when streaming) -->
+                <button id="smallStopBtn" class="small-stop-btn" onclick="userStop()">
+                    <i data-lucide="square"></i>
+                </button>
+
+                <!-- Fullscreen Button (top-right corner) -->
+                <button class="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle fullscreen">
+                    <i data-lucide="maximize" id="fullscreenIcon"></i>
+                </button>
+
+                <!-- VLM Output Overlay (shown in fullscreen mode) -->
+                <div class="fullscreen-vlm-overlay" id="fullscreenVlmOverlay">
+                    <div class="vlm-title">
+                        <i data-lucide="bot"></i>
+                        VLM Output
+                    </div>
+                    <div class="vlm-content" id="fullscreenVlmContent">Ready</div>
+                    <div class="vlm-metrics" id="fullscreenVlmMetrics"></div>
+                </div>
+
+                <!-- Legacy controls (kept for mirror functionality) -->
+                <div class="video-controls" style="top: 64px;">
+                    <button class="video-control-btn" id="mirrorBtn" title="Mirror video">
+                        <i data-lucide="flip-horizontal"></i> Mirror
+                    </button>
+                </div>
+
+                <video id="videoElement" autoplay playsinline muted></video>
+                <div class="video-overlay" id="videoOverlay"></div>
+            </div>
+
+            <!-- Generation Result -->
+            <div class="result-card" id="vlmResultCard">
+                <div class="result-header">
+                    <div class="result-header-left">
+                        <div class="result-title">
+                            <i data-lucide="bot"></i> VLM Output Info
+                        </div>
+                        <div class="result-subtitle">
+                            Model: <span id="modelName" style="font-weight: 600; color: var(--accent-color);">--</span>
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 16px;">
+                        <div class="metrics-inline" id="metricsInline" style="display: none;">
+                            <div class="metric-item">
+                                <span>Latency:</span>
+                                <span class="metric-value" id="latencyValue">--</span>
+                                <span>ms</span>
+                            </div>
+                            <div class="metric-item">
+                                <span>Avg:</span>
+                                <span class="metric-value" id="avgLatencyValue">--</span>
+                                <span>ms</span>
+                            </div>
+                            <div class="metric-item">
+                                <span>Count:</span>
+                                <span class="metric-value" id="countValue">--</span>
+                            </div>
+                        </div>
+                    </div>
+            </div>
+
+                <div class="result-scroll" id="resultScroll">
+                    <div class="result-prompt" id="currentPrompt"></div>
+                    <div id="requestPayloadDebug" class="debug-payload-block" style="display: none; margin-top: 8px;">
+                        <details style="margin: 0;">
+                            <summary style="cursor: pointer; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-secondary);">// Request payload (debug)</summary>
+                            <pre id="requestPayloadContent" style="margin: 8px 0 0; padding: 10px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 11px; overflow: auto; max-height: 240px; white-space: pre-wrap; word-break: break-all;"></pre>
+                        </details>
+                    </div>
+                    <div class="result-text" id="resultText">
+                        <button class="markdown-toggle-embedded" id="markdownToggle" title="Toggle Markdown Rendering">
+                            <span id="markdownIcon"><i data-lucide="code"></i></span>
+                            <span id="markdownText">Markdown</span>
+                        </button>
+                        <button class="copy-button-embedded" id="copyButton" title="Copy to clipboard">
+                            <i data-lucide="copy"></i>
+                        </button>
+                        <div class="result-text-content" id="resultTextContent"></div>
+                    </div>
+                    <div id="responsePayloadDebug" class="debug-payload-block" style="display: none; margin-top: 8px;">
+                        <details style="margin: 0;">
+                            <summary style="cursor: pointer; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-secondary);">// Response payload (debug)</summary>
+                            <pre id="responsePayloadContent" style="margin: 8px 0 0; padding: 10px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 11px; overflow: auto; max-height: 240px; white-space: pre-wrap; word-break: break-all;"></pre>
+                        </details>
+                    </div>
+                    <div class="result-history" id="resultHistory"></div>
+                    <button class="prompt-hint" id="promptHint" onclick="expandDrawerToPanel('promptEditor')" title="Open the Prompt Editor">
+                        <i data-lucide="edit-3"></i>
+                        Want to change the prompt? Click here
+                    </button>
+                </div>
+            </div>
+
+            <!-- System Stats -->
+            <div class="result-card" id="systemStatsCard">
+                <div class="result-header" style="display: flex; justify-content: space-between; align-items: center; gap: 20px;">
+                    <div class="result-title">
+                        <i data-lucide="activity"></i> Local System Stats
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-secondary); text-align: right; font-weight: 400; flex-shrink: 1; min-width: 0;">
+                        <span id="systemInfoHeader" style="flex: 1;">Loading...</span>
+                        <img id="systemProductImage"
+                             src=""
+                             alt="System"
+                             style="width: 48px; height: 48px; object-fit: contain; display: none;"
+                             onerror="this.style.display='none';">
+                    </div>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-label">CPU Utilization</span>
+                        </div>
+                        <div class="ring-gauge-wrapper">
+                            <svg class="ring-gauge" viewBox="0 0 100 100">
+                                <circle class="ring-track" cx="50" cy="50" r="42"></circle>
+                                <circle class="ring-fill" id="cpuRing" cx="50" cy="50" r="42"
+                                        stroke-dasharray="263.9" stroke-dashoffset="263.9"></circle>
+                            </svg>
+                            <div class="ring-center-text">
+                                <span class="stat-value" id="cpuUtil">--%</span>
+                            </div>
+                        </div>
+                        <canvas id="cpuSparkline" class="sparkline"></canvas>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-label">GPU Utilization</span>
+                        </div>
+                        <div class="ring-gauge-wrapper">
+                            <svg class="ring-gauge" viewBox="0 0 100 100">
+                                <circle class="ring-track" cx="50" cy="50" r="42"></circle>
+                                <circle class="ring-fill gpu" id="gpuRing" cx="50" cy="50" r="42"
+                                        stroke-dasharray="263.9" stroke-dashoffset="263.9"></circle>
+                            </svg>
+                            <div class="ring-center-text">
+                                <span class="stat-value" id="gpuUtil">--%</span>
+                            </div>
+                        </div>
+                        <canvas id="gpuUtilSparkline" class="sparkline"></canvas>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <span class="stat-label">System RAM</span>
+                        </div>
+                        <div class="ring-gauge-wrapper">
+                            <svg class="ring-gauge" viewBox="0 0 100 100">
+                                <circle class="ring-track" cx="50" cy="50" r="42"></circle>
+                                <circle class="ring-fill ram" id="ramRing" cx="50" cy="50" r="42"
+                                        stroke-dasharray="263.9" stroke-dashoffset="263.9"></circle>
+                            </svg>
+                            <div class="ring-center-text">
+                                <span class="stat-value" id="ramUsage" style="font-size: 14px;">-- GB</span>
+                            </div>
+                        </div>
+                        <canvas id="ramSparkline" class="sparkline"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app.js" defer></script>
+</body>
+</html>

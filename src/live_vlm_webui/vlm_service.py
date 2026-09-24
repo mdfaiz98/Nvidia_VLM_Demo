@@ -30,6 +30,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Cap the long side of frames sent to the VLM. Qwen2.5-VL (and similar
+# native/dynamic-resolution vision encoders) scale the number of vision
+# tokens roughly linearly with input pixel count, so sending a full 720p+
+# webcam frame costs much more prefill compute than the extra detail is
+# usually worth for a one-sentence scene description. 768px keeps enough
+# detail for typical prompts while cutting vision-token count substantially.
+MAX_IMAGE_DIMENSION = 768
+
 
 class VLMService:
     """Service for analyzing images using VLM via OpenAI-compatible API"""
@@ -88,6 +96,12 @@ class VLMService:
 
         try:
             start_time = time.perf_counter()
+
+            # Downscale before sending - only ever shrinks, never upscales
+            if max(image.size) > MAX_IMAGE_DIMENSION:
+                scale = MAX_IMAGE_DIMENSION / max(image.size)
+                new_size = (round(image.width * scale), round(image.height * scale))
+                image = image.resize(new_size, Image.LANCZOS)
 
             # Convert PIL Image to base64
             img_byte_arr = io.BytesIO()

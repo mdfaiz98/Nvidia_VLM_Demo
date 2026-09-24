@@ -107,7 +107,7 @@
                 cameraSelect.innerHTML = '';
 
                 if (videoDevices.length === 0) {
-                    cameraSelect.innerHTML = '<option value="">No cameras found</option>';
+                    cameraSelect.innerHTML = '<option value="">No webcam - use GMSL Camera tab</option>';
                     return;
                 }
 
@@ -122,8 +122,11 @@
                 selectedCameraId = videoDevices[0].deviceId;
                 console.log(`Found ${videoDevices.length} camera(s)`);
             } catch (err) {
-                console.error('Error enumerating cameras:', err);
-                document.getElementById('cameraSelect').innerHTML = '<option value="">Error detecting cameras</option>';
+                // Expected on this device - no plain UVC webcam is attached,
+                // only the Orbbec GMSL camera, so getUserMedia() always fails
+                // here. Not a bug; the GMSL Camera tab is the working source.
+                console.log('No plain webcam available (expected on this device):', err.message);
+                document.getElementById('cameraSelect').innerHTML = '<option value="">No webcam - use GMSL Camera tab</option>';
             }
         }
 
@@ -204,6 +207,7 @@
                 const webcamControls = document.getElementById('webcamControls');
                 const rtspControls = document.getElementById('rtspControls');
                 const videoFileControls = document.getElementById('videoFileControls');
+                const orbbecControls = document.getElementById('orbbecControls');
                 const rtspBetaWarning = document.getElementById('rtspBetaWarning');
                 const startBtn = document.getElementById('startBtn');
 
@@ -215,6 +219,7 @@
                 webcamControls.style.display = source === 'webcam' ? 'block' : 'none';
                 rtspControls.style.display = source === 'rtsp' ? 'block' : 'none';
                 videoFileControls.style.display = source === 'videofile' ? 'block' : 'none';
+                orbbecControls.style.display = source === 'orbbec' ? 'block' : 'none';
                 rtspBetaWarning.style.display = source === 'rtsp' ? 'flex' : 'none';
             });
         });
@@ -526,6 +531,15 @@
         // wait for enumeration to finish - and release the camera it briefly
         // opens for labels - before actually starting the stream.
         const camerasReady = enumerateCameras();
+
+        // Grafana runs as a separate service (port 3000, plain HTTP - no TLS
+        // set up for it) alongside this demo, not embedded in it. Build the
+        // link off the current page's own hostname so it still works whether
+        // this is being viewed via localhost or the device's LAN IP.
+        const grafanaLink = document.getElementById('grafanaLink');
+        if (grafanaLink) {
+            grafanaLink.href = `http://${window.location.hostname}:3000/d/jetson-orin-exporter-jtop/jetson-orin-exporter-jtop`;
+        }
 
         thinkingMode.addEventListener('change', () => {
             if (websocket && websocket.readyState === WebSocket.OPEN) {
@@ -980,6 +994,84 @@
         function tourBack() {
             if (tourIndex > 0) showTourStep(tourIndex - 1);
         }
+
+        // Page-level fullscreen (header button) - the real browser Fullscreen
+        // API on the whole page, distinct from toggleFullscreen() below which
+        // just CSS-expands the video card in place.
+        const pageFullscreenBtn = document.getElementById('pageFullscreenBtn');
+        const pageFullscreenIcon = document.getElementById('pageFullscreenIcon');
+
+        function togglePageFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch((err) => {
+                    console.error('Error entering fullscreen:', err);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        pageFullscreenBtn.addEventListener('click', togglePageFullscreen);
+
+        document.addEventListener('fullscreenchange', () => {
+            const isFullscreen = !!document.fullscreenElement;
+            pageFullscreenIcon.setAttribute('data-lucide', isFullscreen ? 'minimize' : 'maximize');
+            lucide.createIcons();
+            // Keep the embedded /depth page's own fullscreen button in sync
+            depthFrame.contentWindow?.postMessage({ type: 'vlm:fullscreen', value: isFullscreen }, window.location.origin);
+        });
+
+        // Depth Camera page - opened as a full-window iframe overlay on top
+        // of this page rather than by navigating to /depth. Browsers only
+        // grant fullscreen from a user click, so a new document can't
+        // re-enter it on load; never leaving this document is the only way
+        // fullscreen survives switching between the two pages. The /depth
+        // page (depth.js) detects it's embedded and posts 'depth:close' /
+        // 'depth:toggleFullscreen' back here instead of navigating itself.
+        const depthPageLink = document.getElementById('depthPageLink');
+        const depthOverlay = document.getElementById('depthOverlay');
+        const depthFrame = document.getElementById('depthFrame');
+        let resumeStreamAfterDepth = false;
+
+        function openDepthOverlay() {
+            // Same as navigating away used to: stop this page's stream so
+            // the two pages don't run competing VLM loops on the GPU. It's
+            // restarted on return (see closeDepthOverlay). userStop(), not
+            // stop(), so auto-reconnect doesn't restart it behind the overlay.
+            resumeStreamAfterDepth = !!peerConnection || !!reconnectTimer;
+            if (resumeStreamAfterDepth) userStop();
+            depthFrame.src = '/depth';
+            depthOverlay.classList.add('open');
+            depthFrame.focus();
+        }
+
+        function closeDepthOverlay() {
+            depthOverlay.classList.remove('open');
+            // Unload the page so its camera/VLM session closes, same as
+            // navigating away from it used to.
+            depthFrame.src = 'about:blank';
+            if (resumeStreamAfterDepth) {
+                resumeStreamAfterDepth = false;
+                start();
+            }
+        }
+
+        depthPageLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            openDepthOverlay();
+        });
+
+        window.addEventListener('message', (e) => {
+            if (e.origin !== window.location.origin || e.source !== depthFrame.contentWindow) return;
+            if (e.data?.type === 'depth:close') {
+                closeDepthOverlay();
+            } else if (e.data?.type === 'depth:toggleFullscreen') {
+                togglePageFullscreen();
+            } else if (e.data?.type === 'depth:ready') {
+                depthFrame.contentWindow.postMessage(
+                    { type: 'vlm:fullscreen', value: !!document.fullscreenElement }, window.location.origin);
+            }
+        });
 
         helpBtn.addEventListener('click', startTour);
         tourNextBtn.addEventListener('click', tourNext);
@@ -1732,6 +1824,10 @@
             const hostname = stats.hostname || 'System';
             const cpuModel = stats.cpu_model || 'Unknown CPU';
             const gpuName = stats.gpu_name || 'Unknown GPU';
+            const cpuCoreCount = stats.cpu_core_count || null;
+            const gpuPowerW = stats.gpu_power_w;
+            const osPretty = stats.os_pretty || null;
+            const l4tVersion = stats.l4t_version || null;
             let boardName = stats.board_name;  // e.g., "Jetson AGX Thor Developer Kit"
 
             // Safety check: ensure boardName is a string (not an object)
@@ -1772,11 +1868,18 @@
                     `${qcGpu}${qcNpu}` +
                     (osLine ? `<br>${osLine}` : '');
             } else if (boardName && typeof boardName === 'string') {
-                // Jetson: Two-line format
+                // Jetson: Three-line format
                 // Line 1: Board name (hostname)
-                // Line 2: GPU name
+                // Line 2: GPU name, power draw, CPU core count
+                // Line 3: OS / L4T version
                 const gpuDisplayName = gpuName.includes('GPU') ? gpuName : `${gpuName} GPU`;
-                systemInfoElem.innerHTML = `<b>${boardName}</b> (<code>${hostname}</code>)<br>${gpuDisplayName}`;
+                const powerPart = (gpuPowerW !== null && gpuPowerW !== undefined) ? ` &middot; ${gpuPowerW.toFixed(1)}W` : '';
+                const corePart = cpuCoreCount ? ` &middot; ${cpuCoreCount}-core CPU` : '';
+                const osParts = [osPretty, l4tVersion].filter(Boolean).join(' &middot; ');
+                systemInfoElem.innerHTML =
+                    `<b>${boardName}</b> (<code>${hostname}</code>)<br>` +
+                    `${gpuDisplayName}${powerPart}${corePart}` +
+                    (osParts ? `<br>${osParts}` : '');
             } else if (productName && productName.includes('DGX')) {
                 // DGX: Two-line format
                 // Line 1: DGX Product name (hostname)
@@ -2106,6 +2209,28 @@
         let reconnectTimer = null;
         let isAutoReconnecting = false;
         const RECONNECT_DELAY_MS = 3000;
+        const ICE_SETTLE_TIMEOUT_MS = 10000;
+
+        // Right after reconnectFn() returns, ICE is still 'new'/'checking' -
+        // wait for it to settle before judging the attempt. Checking
+        // immediately made every reconnect look failed, so a healthy
+        // connection was torn down and retried every RECONNECT_DELAY_MS
+        // forever after any server restart or network blip.
+        function waitForIceSettled(pc) {
+            const settled = () => ['connected', 'completed', 'failed', 'disconnected', 'closed']
+                .includes(pc.iceConnectionState);
+            if (settled()) return Promise.resolve();
+            return new Promise((resolve) => {
+                const done = () => {
+                    clearTimeout(timer);
+                    pc.removeEventListener('iceconnectionstatechange', onChange);
+                    resolve();
+                };
+                const onChange = () => { if (settled()) done(); };
+                const timer = setTimeout(done, ICE_SETTLE_TIMEOUT_MS);
+                pc.addEventListener('iceconnectionstatechange', onChange);
+            });
+        }
 
         function attemptAutoReconnect(reconnectFn) {
             if (userInitiatedStop || reconnectTimer) return;
@@ -2124,7 +2249,9 @@
                 }
                 // If the attempt didn't end up connected (reconnectFn's own catch
                 // block may have swallowed the error), schedule another attempt.
-                if (!userInitiatedStop && (!peerConnection || peerConnection.iceConnectionState !== 'connected')) {
+                if (peerConnection) await waitForIceSettled(peerConnection);
+                const iceState = peerConnection && peerConnection.iceConnectionState;
+                if (!userInitiatedStop && iceState !== 'connected' && iceState !== 'completed') {
                     attemptAutoReconnect(reconnectFn);
                 }
             }, RECONNECT_DELAY_MS);
@@ -2177,6 +2304,8 @@
                 await startRTSP();
             } else if (inputSource === 'videofile') {
                 await startVideoFile();
+            } else if (inputSource === 'orbbec') {
+                await startOrbbec();
             }
         }
 
@@ -2394,6 +2523,107 @@
                 }
                 if (!userInitiatedStop && !isAutoReconnecting) {
                     attemptAutoReconnect(startRTSP);
+                }
+            }
+        }
+
+        // Start WebRTC (Orbbec mode) - server-side Color track from the Orbbec
+        // depth camera, same recvonly pattern as RTSP. Shares the same
+        // OrbbecCameraManager singleton as the /depth page, so this and a
+        // /depth session can run concurrently off the same open device.
+        async function startOrbbec() {
+            try {
+                if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+                    connectWebSocket();
+                }
+
+                updateStatus('Connecting to Orbbec camera...', 'processing');
+
+                peerConnection = new RTCPeerConnection({
+                    iceServers: []
+                });
+
+                peerConnection.ontrack = (event) => {
+                    console.log('Received Orbbec Color stream from server');
+                    if (event.track.kind === 'video') {
+                        videoElement.srcObject = event.streams[0];
+                        videoElement.play().catch(err => {
+                            console.error('Error playing video:', err);
+                        });
+                        updateStatus('Streaming', 'connected');
+                    }
+                };
+
+                peerConnection.oniceconnectionstatechange = () => {
+                    console.log('ICE connection state:', peerConnection.iceConnectionState);
+                    switch (peerConnection.iceConnectionState) {
+                        case 'connected':
+                            updateStatus('Streaming', 'connected');
+                            break;
+                        case 'disconnected':
+                        case 'failed':
+                        case 'closed':
+                            updateStatus('Disconnected - reconnecting...', 'disconnected');
+                            attemptAutoReconnect(startOrbbec);
+                            break;
+                    }
+                };
+
+                peerConnection.addTransceiver('video', { direction: 'recvonly' });
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                await new Promise((resolve) => {
+                    if (peerConnection.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const checkState = () => {
+                            if (peerConnection.iceGatheringState === 'complete') {
+                                peerConnection.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        };
+                        peerConnection.addEventListener('icegatheringstatechange', checkState);
+                        setTimeout(() => {
+                            peerConnection.removeEventListener('icegatheringstatechange', checkState);
+                            resolve();
+                        }, 5000);
+                    }
+                });
+
+                const response = await fetch('/offer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sdp: peerConnection.localDescription.sdp,
+                        type: peerConnection.localDescription.type,
+                        orbbec: true,
+                        session_id: sessionId,
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to connect to Orbbec camera');
+                }
+
+                const answer = await response.json();
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+
+                isAnalysisRunning = true;
+
+            } catch (error) {
+                console.error('Error starting Orbbec camera:', error);
+                updateStatus(`Error: ${error.message}`, 'disconnected');
+                if (!isAutoReconnecting) {
+                    alert('Failed to connect to Orbbec camera: ' + error.message);
+                }
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+                if (!userInitiatedStop && !isAutoReconnecting) {
+                    attemptAutoReconnect(startOrbbec);
                 }
             }
         }

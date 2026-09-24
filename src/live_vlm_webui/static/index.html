@@ -52,6 +52,12 @@ limitations under the License.
         </div>
         <div class="header-right">
             <span class="status-badge disconnected" id="connectionStatus">Disconnected</span>
+            <a href="/depth" class="settings-btn" id="depthPageLink" title="Open Depth Camera page">
+                <i data-lucide="box"></i>
+            </a>
+            <button class="settings-btn" id="pageFullscreenBtn" title="Toggle fullscreen">
+                <i data-lucide="maximize" id="pageFullscreenIcon"></i>
+            </button>
             <button class="settings-btn" id="helpBtn" title="Guided tour of the UI">
                 <i data-lucide="help-circle"></i>
             </button>
@@ -271,7 +277,7 @@ limitations under the License.
                             <label style="margin-bottom: 0; flex: 1;">API Base URL</label>
                             <div style="position: relative;">
                                 <button class="icon-btn" id="apiPresetsBtn" title="Select preset API endpoint">
-                                    <i data-lucide="clipboard"></i>
+                                    <i data-lucide="list"></i>
                                 </button>
                                 <div id="apiPresetsMenu" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 4px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: var(--radius-md); box-shadow: var(--card-shadow); min-width: 280px; z-index: 9999;">
                                     <div style="padding: 8px 0;">
@@ -347,7 +353,7 @@ limitations under the License.
                 <div class="panel-content" id="cameraConfig">
                     <!-- Input Source Tabs -->
                     <div class="input-source-tabs">
-                        <button class="input-source-tab active" data-source="webcam">
+                        <button class="input-source-tab" data-source="webcam">
                             <i data-lucide="video" style="width: 14px; height: 14px; margin-right: 4px;"></i>
                             Webcam
                         </button>
@@ -360,10 +366,14 @@ limitations under the License.
                             <i data-lucide="file-video" style="width: 14px; height: 14px; margin-right: 4px;"></i>
                             Video File
                         </button>
+                        <button class="input-source-tab active" data-source="orbbec" title="Orbbec depth camera's Color stream, over GMSL (no separate webcam on this device)">
+                            <i data-lucide="scan" style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                            GMSL Camera
+                        </button>
                     </div>
 
                     <!-- Webcam Controls -->
-                    <div id="webcamControls">
+                    <div id="webcamControls" style="display: none;">
                         <div class="form-group">
                             <label>Camera Selection</label>
                             <select id="cameraSelect">
@@ -402,6 +412,15 @@ limitations under the License.
                             <label>Video File</label>
                             <input type="file" id="videoFileInput" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v" style="margin-bottom: 8px;">
                             <div id="videoFileStatus" class="input-hint" style="margin-top: -4px; margin-bottom: 12px;">Select a video file to play instead of a live camera</div>
+                        </div>
+                    </div>
+
+                    <!-- Orbbec Controls - no URL/file needed, just Start -->
+                    <div id="orbbecControls">
+                        <div class="form-group">
+                            <div class="input-hint" style="margin-bottom: 12px;">
+                                Uses the Orbbec depth camera's Color stream. Depth/IR and full camera telemetry are on the <a href="/depth" target="_blank">Depth Camera page</a>.
+                            </div>
                         </div>
                     </div>
                     <div class="form-group">
@@ -614,10 +633,13 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
             <!-- System Stats -->
             <div class="result-card" id="systemStatsCard">
                 <div class="result-header" style="display: flex; justify-content: space-between; align-items: center; gap: 20px;">
-                    <div class="result-title">
+                    <div class="result-title" style="display: flex; align-items: center; gap: 6px;">
                         <i data-lucide="activity"></i> Local System Stats
+                        <a id="grafanaLink" href="#" target="_blank" rel="noopener" class="icon-btn" title="Open detailed monitoring dashboard (Grafana)">
+                            <i data-lucide="bar-chart-3"></i>
+                        </a>
                     </div>
-                    <div style="display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-secondary); text-align: right; font-weight: 400; flex-shrink: 1; min-width: 0;">
+                    <div style="display: flex; align-items: center; gap: 12px; font-size: 13px; line-height: 1.6; color: var(--text-secondary); text-align: right; font-weight: 400; flex-shrink: 1; min-width: 0;">
                         <span id="systemInfoHeader" style="flex: 1;">Loading...</span>
                         <img id="systemProductImage"
                              src=""
@@ -681,6 +703,12 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Depth Camera page overlay - /depth loaded in-place over this page
+         (see openDepthOverlay in app.js) so page fullscreen survives the switch -->
+    <div class="depth-overlay" id="depthOverlay">
+        <iframe id="depthFrame" title="Depth Camera" src="about:blank"></iframe>
     </div>
 
     <script src="/app.js" defer></script>

@@ -65,6 +65,9 @@ ENV/
 # Logs
 *.log
 
+# Orbbec SDK's own runtime log (CWD-relative, unrelated to this repo's logging)
+Log/
+
 # Build artifacts
 *.whl
 

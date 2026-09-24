@@ -22,6 +22,7 @@ import logging
 import os
 import platform
 import psutil
+import re
 import socket
 import subprocess
 from abc import ABC, abstractmethod
@@ -280,6 +281,49 @@ def get_thermal_stats() -> Dict[str, Optional[float]]:
     return result
 
 
+_static_system_info: Optional[Dict[str, Optional[str]]] = None
+
+
+def get_static_system_info() -> Dict[str, Optional[str]]:
+    """
+    OS version and L4T/JetPack version - read once and cached, since these
+    don't change during a run (unlike everything else in get_cpu_ram_stats,
+    which is polled every 0.25s and shouldn't be doing file I/O that often).
+    """
+    global _static_system_info
+    if _static_system_info is not None:
+        return _static_system_info
+
+    result: Dict[str, Optional[str]] = {
+        "os_pretty": None,
+        "l4t_version": None,
+        "kernel_version": platform.release(),
+    }
+
+    try:
+        with open("/etc/os-release", "r") as f:
+            for line in f:
+                if line.startswith("PRETTY_NAME="):
+                    result["os_pretty"] = line.split("=", 1)[1].strip().strip('"')
+                    break
+    except Exception as e:
+        logger.debug(f"Could not read /etc/os-release: {e}")
+
+    try:
+        with open("/etc/nv_tegra_release", "r") as f:
+            first_line = f.readline().strip()
+        m = re.search(r"R(\d+)\s*\(release\),\s*REVISION:\s*([\d.]+)", first_line)
+        if m:
+            result["l4t_version"] = f"L4T R{m.group(1)}.{m.group(2)}"
+    except FileNotFoundError:
+        pass  # not a Jetson - no L4T version to report
+    except Exception as e:
+        logger.debug(f"Could not read /etc/nv_tegra_release: {e}")
+
+    _static_system_info = result
+    return result
+
+
 class GPUMonitor(ABC):
     """Abstract base class for GPU monitoring"""
 
@@ -295,6 +339,10 @@ class GPUMonitor(ABC):
         self.vram_used_history = deque(maxlen=history_size)
         self.cpu_util_history = deque(maxlen=history_size)
         self.ram_used_history = deque(maxlen=history_size)
+        self.power_history = deque(maxlen=history_size)
+        self.emc_util_history = deque(maxlen=history_size)
+        self.cpu_temp_history = deque(maxlen=history_size)
+        self.gpu_temp_history = deque(maxlen=history_size)
 
     @abstractmethod
     def get_stats(self) -> Dict:
@@ -312,31 +360,46 @@ class GPUMonitor(ABC):
             # Use interval=None for non-blocking call
             # First call returns 0.0, subsequent calls return percentage since last call
             cpu_percent = psutil.cpu_percent(interval=None)
+            cpu_per_core = psutil.cpu_percent(interval=None, percpu=True)
             memory = psutil.virtual_memory()
+            swap = psutil.swap_memory()
             hostname = socket.gethostname()
             cpu_model = get_cpu_model()
 
             return {
                 "cpu_percent": cpu_percent,
+                "cpu_per_core": cpu_per_core,
                 "cpu_model": cpu_model,
+                "cpu_core_count": psutil.cpu_count(logical=True),
                 "ram_used_gb": memory.used / (1024**3),
                 "ram_total_gb": memory.total / (1024**3),
                 "ram_percent": memory.percent,
+                "swap_used_gb": swap.used / (1024**3),
+                "swap_total_gb": swap.total / (1024**3),
+                "swap_percent": swap.percent,
                 "hostname": hostname,
                 **get_thermal_stats(),
+                **get_static_system_info(),
             }
         except Exception as e:
             logger.error(f"Error getting CPU/RAM stats: {e}")
             return {
                 "cpu_percent": 0,
+                "cpu_per_core": [],
                 "cpu_model": "Unknown CPU",
+                "cpu_core_count": None,
                 "ram_used_gb": 0,
                 "ram_total_gb": 0,
                 "ram_percent": 0,
+                "swap_used_gb": 0,
+                "swap_total_gb": 0,
+                "swap_percent": 0,
                 "hostname": "Unknown",
                 "cpu_temp_c": None,
                 "gpu_temp_c": None,
                 "npu_temp_c": None,
+                "os_pretty": None,
+                "l4t_version": None,
             }
 
     def update_history(self, stats: Dict):
@@ -345,6 +408,10 @@ class GPUMonitor(ABC):
         self.vram_used_history.append(stats.get("vram_used_gb", 0))
         self.cpu_util_history.append(stats.get("cpu_percent", 0))
         self.ram_used_history.append(stats.get("ram_used_gb", 0))
+        self.power_history.append(stats.get("gpu_power_w") or 0)
+        self.emc_util_history.append(stats.get("emc_percent") or 0)
+        self.cpu_temp_history.append(stats.get("cpu_temp_c"))
+        self.gpu_temp_history.append(stats.get("gpu_temp_c"))
 
     def get_history(self) -> Dict[str, List[float]]:
         """Get historical data as lists"""
@@ -353,6 +420,10 @@ class GPUMonitor(ABC):
             "vram_used": list(self.vram_used_history),
             "cpu_util": list(self.cpu_util_history),
             "ram_used": list(self.ram_used_history),
+            "power": list(self.power_history),
+            "emc_util": list(self.emc_util_history),
+            "cpu_temp": list(self.cpu_temp_history),
+            "gpu_temp": list(self.gpu_temp_history),
         }
 
 
@@ -1245,16 +1316,27 @@ class JetsonOrinMonitor(GPUMonitor):
                     # Try to get GPU temp
                     temp_c = temps.get("GPU", temps.get("thermal", None))
 
-                # Power
+                # Power - jtop.power is {"rail": {name: {power: mW, ...}, ...}, "tot": {power: mW, ...}}
                 power_w = None
+                power_rails: Dict[str, float] = {}
                 if hasattr(self.jtop_instance, "power"):
                     power = self.jtop_instance.power
-                    # Sum all power rails if available
                     if isinstance(power, dict):
-                        power_w = (
-                            sum(p.get("power", 0) for p in power.values() if isinstance(p, dict))
-                            / 1000
-                        )  # mW to W
+                        tot = power.get("tot", {})
+                        if isinstance(tot, dict) and "power" in tot:
+                            power_w = tot["power"] / 1000  # mW to W
+                        rails = power.get("rail", {})
+                        if isinstance(rails, dict):
+                            for rail_name, rail_data in rails.items():
+                                if isinstance(rail_data, dict) and "power" in rail_data:
+                                    power_rails[rail_name] = round(rail_data["power"] / 1000, 2)
+
+                # EMC (memory controller) utilization - the metric that actually
+                # explains LLM decode speed on Jetson, which is memory-bandwidth
+                # bound rather than compute bound for typical model sizes.
+                emc_percent = None
+                if isinstance(self.jtop_instance.stats, dict):
+                    emc_percent = self.jtop_instance.stats.get("EMC")
 
                 # Get board name (e.g., "Jetson AGX Orin Developer Kit")
                 board_name = None
@@ -1391,6 +1473,8 @@ class JetsonOrinMonitor(GPUMonitor):
                     "vram_percent": round(vram_percent, 1),
                     "gpu_temp_c": temp_c,
                     "gpu_power_w": power_w,
+                    "power_rails": power_rails,
+                    "emc_percent": emc_percent,
                     "board_name": board_name,
                     **system_stats,
                 }

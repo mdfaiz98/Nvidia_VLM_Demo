@@ -179,6 +179,14 @@ limitations under the License.
             white-space: nowrap;
         }
 
+        /* Hostname in the System Stats header - the global 0.8em shrink
+           reads as illegibly tiny stacked on that block's own small
+           font-size, so keep it closer to full size here. */
+        #systemInfoHeader code {
+            font-size: 0.95em;
+            padding: 1px 5px;
+        }
+
         /* Header */
         .header {
             background: var(--advantech-navy);
@@ -2595,3 +2603,25 @@ limitations under the License.
             }
         }
 
+
+        /* Depth Camera page overlay - /depth in a full-window iframe over the
+           main page, so page-level fullscreen survives switching between them
+           (see openDepthOverlay in app.js). Above everything, incl. the tour. */
+        .depth-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 20000;
+            background: var(--bg-primary);
+        }
+
+        .depth-overlay.open {
+            display: block;
+        }
+
+        .depth-overlay iframe {
+            width: 100%;
+            height: 100%;
+            border: 0;
+            display: block;
+        }

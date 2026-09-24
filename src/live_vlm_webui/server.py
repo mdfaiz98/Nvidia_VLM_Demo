@@ -41,6 +41,7 @@ from aiortc import (
 from aiortc.contrib.media import MediaRelay
 
 from .gpu_monitor import create_monitor
+from .orbbec_source import OrbbecColorTrack, OrbbecDeviceNotFoundError, get_orbbec_manager
 from .rtsp_track import RTSPVideoTrack
 from .video_file_track import VideoFileTrack
 from .video_processor import VideoProcessorTrack
@@ -252,6 +253,115 @@ async def app_script(request):
     path = os.path.join(os.path.dirname(__file__), "static", "app.js")
     content = open(path, "r").read()
     return web.Response(content_type="text/javascript", text=content, headers={"Cache-Control": "no-store"})
+
+
+async def depth_page(request):
+    """Serve the depth-camera test page (Color/Depth/IR grid + VLM output)."""
+    path = os.path.join(os.path.dirname(__file__), "static", "depth.html")
+    content = open(path, "r").read()
+    return web.Response(content_type="text/html", text=content, headers={"Cache-Control": "no-store"})
+
+
+async def depth_style(request):
+    """Serve the depth-camera page's stylesheet. See app_style() re: no-store."""
+    path = os.path.join(os.path.dirname(__file__), "static", "depth.css")
+    content = open(path, "r").read()
+    return web.Response(content_type="text/css", text=content, headers={"Cache-Control": "no-store"})
+
+
+async def depth_script(request):
+    """Serve the depth-camera page's JS. See app_style() re: no-store."""
+    path = os.path.join(os.path.dirname(__file__), "static", "depth.js")
+    content = open(path, "r").read()
+    return web.Response(content_type="text/javascript", text=content, headers={"Cache-Control": "no-store"})
+
+
+async def orbbec_ws(request):
+    """
+    Serve Depth/IR JPEG frames and IMU telemetry from the Orbbec camera.
+
+    Kept separate from the main /ws handler (VLM text/prompt/config messages)
+    since this is a different concern entirely. Color goes over the existing
+    WebRTC pipeline instead (see offer()'s "orbbec" branch); Depth/IR ride a
+    plain WebSocket rather than extra WebRTC tracks - see CLAUDE.md's
+    aioice/loopback notes on why more WebRTC tracks isn't the easy win it
+    looks like here.
+
+    Pull-based, so at most one frame is ever in flight: the client sends
+    {"type": "ready", "ir": "left"|"right"} once it has drawn the previous
+    frame, and the server answers with the next *new* camera frame. A fixed-
+    rate push would let frames pile up in socket buffers whenever the
+    browser falls behind, making Depth/IR drift further behind Color. Each
+    answer is a JSON header, then one binary message per image, tagged by
+    its first byte (0 = depth, 1 = IR) - raw JPEG, no base64 inflation.
+
+    GET /ws/orbbec
+    """
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    try:
+        manager = get_orbbec_manager()
+        manager.start()
+    except OrbbecDeviceNotFoundError as e:
+        await ws.send_json({"type": "error", "message": str(e)})
+        await ws.close()
+        return ws
+    except Exception as e:
+        logger.error(f"Failed to start Orbbec camera for WebSocket: {e}", exc_info=True)
+        await ws.send_json({"type": "error", "message": f"Failed to start Orbbec camera: {e}"})
+        await ws.close()
+        return ws
+
+    loop = asyncio.get_event_loop()
+    last_version = -1
+    try:
+        async for msg in ws:
+            if msg.type != web.WSMsgType.TEXT:
+                continue
+            try:
+                request_data = json.loads(msg.data)
+            except json.JSONDecodeError:
+                continue
+            if request_data.get("type") != "ready":
+                continue
+            ir_side = "right" if request_data.get("ir") == "right" else "left"
+
+            # Paced by the camera itself (30fps), not a timer. Times out so a
+            # stalled camera still answers (with no images) and the client
+            # keeps asking rather than hanging.
+            last_version = await loop.run_in_executor(
+                None, manager.wait_for_frame_after, last_version, 1.0
+            )
+
+            # cv2.imencode is real CPU work - run it off the event loop so it
+            # can't add scheduling jitter to the Color track's own VLM
+            # inference round trip, which shares this same asyncio loop.
+            depth_jpeg, ir_jpeg = await asyncio.gather(
+                loop.run_in_executor(None, manager.encode_depth_jpeg),
+                loop.run_in_executor(None, manager.encode_ir_jpeg, ir_side),
+            )
+
+            await ws.send_json(
+                {
+                    "type": "orbbec_frame",
+                    "has_depth": depth_jpeg is not None,
+                    "has_ir": ir_jpeg is not None,
+                    "telemetry": manager.get_telemetry(),
+                }
+            )
+            if depth_jpeg:
+                await ws.send_bytes(b"\x00" + depth_jpeg)
+            if ir_jpeg:
+                await ws.send_bytes(b"\x01" + ir_jpeg)
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    except Exception as e:
+        logger.error(f"Orbbec WebSocket error: {e}", exc_info=True)
+    finally:
+        logger.info("Orbbec WebSocket client disconnected")
+
+    return ws
 
 
 async def models(request):
@@ -611,6 +721,7 @@ async def offer(request):
     offer_sdp = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
     rtsp_url = params.get("rtsp_url")  # Optional RTSP URL for IP camera mode
     video_file_path = params.get("video_file_path")  # Optional local video file mode
+    use_orbbec = params.get("orbbec")  # Optional Orbbec depth camera Color stream
     session_id = params.get("session_id", "default")
 
     session = get_or_create_session(session_id)
@@ -708,6 +819,38 @@ async def offer(request):
                 status=500,
                 content_type="application/json",
                 text=json.dumps({"error": f"Failed to open video file: {str(e)}"}),
+            )
+    elif use_orbbec:
+        logger.info(f"[{session_id}] Creating Orbbec Color track")
+        try:
+            manager = get_orbbec_manager()
+            manager.start()
+
+            orbbec_track = OrbbecColorTrack(manager)
+            rtsp_cleanup_track = orbbec_track  # Stops this session's track wrapper, not the shared device
+
+            relayed_orbbec = relay.subscribe(orbbec_track)
+
+            processor_track = VideoProcessorTrack(
+                relayed_orbbec, session_vlm, text_callback=session_callback
+            )
+
+            pc.addTrack(processor_track)
+            logger.info("Added Orbbec Color processor track to peer connection")
+
+        except OrbbecDeviceNotFoundError as e:
+            logger.error(f"Orbbec device not found: {e}")
+            return web.Response(
+                status=404,
+                content_type="application/json",
+                text=json.dumps({"error": str(e)}),
+            )
+        except Exception as e:
+            logger.error(f"Failed to create Orbbec track: {e}")
+            return web.Response(
+                status=500,
+                content_type="application/json",
+                text=json.dumps({"error": f"Failed to start Orbbec camera: {str(e)}"}),
             )
     else:
         # Webcam mode: wait for browser to send track
@@ -1049,6 +1192,12 @@ async def on_shutdown(app):
         gpu_monitor.cleanup()
         logger.info("GPU monitor cleaned up")
 
+    # Release the Orbbec camera, if it was ever opened
+    try:
+        get_orbbec_manager().stop()
+    except Exception as e:
+        logger.warning(f"Error stopping Orbbec camera: {e}")
+
     # Close all websockets and clear session state
     for ws in list(websockets):
         await ws.close()
@@ -1096,6 +1245,12 @@ async def create_app(test_mode=False):
 
     # Local video file upload/playback endpoint
     app.router.add_post("/api/video/upload", upload_video_file)
+
+    # Orbbec depth camera endpoints
+    app.router.add_get("/depth", depth_page)
+    app.router.add_get("/depth.css", depth_style)
+    app.router.add_get("/depth.js", depth_script)
+    app.router.add_get("/ws/orbbec", orbbec_ws)
 
     # Serve static files (images, etc.)
     # Always serve from static/images within the package (works for both pip and dev installs)

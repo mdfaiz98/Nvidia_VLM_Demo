@@ -62,6 +62,9 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0",
 ]
+depth-camera = [
+    "pyorbbecsdk2>=2.1.2",
+]
 
 [project.urls]
 Homepage = "https://github.com/nvidia-ai-iot/live-vlm-webui"

@@ -92,41 +92,42 @@
         // Enable markdown by default (user can disable if they prefer raw text)
         let markdownEnabled = localStorage.getItem('markdownEnabled') !== 'false';
 
-        // Enumerate and list available cameras
+        // The Webcam tab captures USB webcams server-side (see usb_camera.py),
+        // not with getUserMedia(): on this device the browser's "default
+        // camera" is /dev/video0, a raw Orbbec GMSL node, and the browser
+        // merely opening it holds the node open and breaks the Orbbec SDK's
+        // own pipeline. The server lists USB cameras by name via sysfs with
+        // the GMSL nodes filtered out, so the browser never touches a camera.
         async function enumerateCameras() {
+            const cameraSelect = document.getElementById('cameraSelect');
             try {
-                // Request permission first to get device labels
-                const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
-                tempStream.getTracks().forEach(track => track.stop());
+                const response = await fetch('/api/usbcam/list');
+                const { cameras } = await response.json();
 
-                // Now enumerate with labels
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const videoDevices = devices.filter(device => device.kind === 'videoinput');
-
-                const cameraSelect = document.getElementById('cameraSelect');
                 cameraSelect.innerHTML = '';
-
-                if (videoDevices.length === 0) {
-                    cameraSelect.innerHTML = '<option value="">No webcam - use GMSL Camera tab</option>';
+                if (cameras.length === 0) {
+                    cameraSelect.innerHTML = '<option value="">No USB camera - use GMSL Camera tab</option>';
+                    selectedCameraId = null;
                     return;
                 }
 
-                videoDevices.forEach((device, index) => {
+                cameras.forEach((camera) => {
                     const option = document.createElement('option');
-                    option.value = device.deviceId;
-                    option.text = device.label || `Camera ${index + 1}`;
+                    option.value = camera.device;
+                    option.text = `${camera.name} (${camera.device})`;
                     cameraSelect.appendChild(option);
                 });
-
-                // Select first camera by default
-                selectedCameraId = videoDevices[0].deviceId;
-                console.log(`Found ${videoDevices.length} camera(s)`);
+                // Keep the user's choice if that camera is still there - node
+                // numbers shift when cameras are plugged/unplugged.
+                if (!cameras.some((camera) => camera.device === selectedCameraId)) {
+                    selectedCameraId = cameras[0].device;
+                }
+                cameraSelect.value = selectedCameraId;
+                console.log(`Found ${cameras.length} USB camera(s)`);
             } catch (err) {
-                // Expected on this device - no plain UVC webcam is attached,
-                // only the Orbbec GMSL camera, so getUserMedia() always fails
-                // here. Not a bug; the GMSL Camera tab is the working source.
-                console.log('No plain webcam available (expected on this device):', err.message);
-                document.getElementById('cameraSelect').innerHTML = '<option value="">No webcam - use GMSL Camera tab</option>';
+                console.error('Failed to list USB cameras:', err);
+                cameraSelect.innerHTML = '<option value="">Could not list cameras</option>';
+                selectedCameraId = null;
             }
         }
 
@@ -135,35 +136,11 @@
             selectedCameraId = e.target.value;
             console.log('Selected camera:', selectedCameraId);
 
-            // If already running, switch camera
-            if (isAnalysisRunning && localStream) {
-                try {
-                    // Stop current stream
-                    localStream.getTracks().forEach(track => track.stop());
-
-                    // Get new stream with selected camera
-                localStream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                            deviceId: { exact: selectedCameraId },
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 }
-                        }
-                    });
-
-                    // Update video element
-                    videoElement.srcObject = localStream;
-
-                    // Replace track in peer connection
-                    const videoTrack = localStream.getVideoTracks()[0];
-                    const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
-                    if (sender) {
-                        await sender.replaceTrack(videoTrack);
-                        console.log('Camera switched successfully');
-                    }
-                } catch (err) {
-                    console.error('Error switching camera:', err);
-                    alert('Failed to switch camera: ' + err.message);
-                }
+            // If already streaming from a USB camera, restart on the new one
+            const activeTab = document.querySelector('.input-source-tab.active');
+            if (isAnalysisRunning && activeTab && activeTab.getAttribute('data-source') === 'webcam') {
+                await stop();
+                await start();
             }
 
             // Trigger flash animation
@@ -527,9 +504,8 @@
             resultScroll.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
-        // Enumerate cameras on page load; kept so an autostart (kiosk) load can
-        // wait for enumeration to finish - and release the camera it briefly
-        // opens for labels - before actually starting the stream.
+        // List USB cameras on page load; kept as a promise so an autostart
+        // (kiosk) load can wait for the list before starting the stream.
         const camerasReady = enumerateCameras();
 
         // Grafana runs as a separate service (port 3000, plain HTTP - no TLS
@@ -2316,46 +2292,29 @@
                     connectWebSocket();
                 }
 
-                updateStatus('Requesting camera...', 'processing');
-
-                // Use selected camera or default
-                const videoConstraints = {
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
-                };
-
-                if (selectedCameraId) {
-                    videoConstraints.deviceId = { exact: selectedCameraId };
+                // Re-list on every start: /dev/videoN numbers change when
+                // cameras (USB or GMSL) are plugged or unplugged.
+                await enumerateCameras();
+                if (!selectedCameraId) {
+                    throw new Error('No USB camera connected - use the GMSL Camera tab');
                 }
 
-                localStream = await navigator.mediaDevices.getUserMedia({
-                    video: videoConstraints,
-                    audio: false
-                });
-                videoElement.srcObject = localStream;
-
-                updateStatus('Connecting...', 'processing');
+                updateStatus('Connecting to USB camera...', 'processing');
 
                 // No STUN/TURN server needed - browser and server are on the same
                 // machine (localhost), so host candidates alone are sufficient.
-                // A public STUN server here would make the webcam feed silently
-                // depend on internet access for no reason.
                 peerConnection = new RTCPeerConnection({
                     iceServers: []
                 });
 
-                localStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, localStream);
-                });
-
                 peerConnection.ontrack = (event) => {
-                    console.log('Received remote track');
+                    console.log('Received USB camera stream from server');
                     if (event.track.kind === 'video') {
                         videoElement.srcObject = event.streams[0];
-                        // Explicitly play to ensure continuous frame flow
                         videoElement.play().catch(err => {
                             console.error('Error playing video:', err);
                         });
+                        updateStatus('Streaming', 'connected');
                     }
                 };
 
@@ -2374,31 +2333,56 @@
                     }
                 };
 
+                peerConnection.addTransceiver('video', { direction: 'recvonly' });
                 const offer = await peerConnection.createOffer();
                 await peerConnection.setLocalDescription(offer);
 
+                await new Promise((resolve) => {
+                    if (peerConnection.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const checkState = () => {
+                            if (peerConnection.iceGatheringState === 'complete') {
+                                peerConnection.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        };
+                        peerConnection.addEventListener('icegatheringstatechange', checkState);
+                        setTimeout(() => {
+                            peerConnection.removeEventListener('icegatheringstatechange', checkState);
+                            resolve();
+                        }, 5000);
+                    }
+                });
+
                 const response = await fetch('/offer', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         sdp: peerConnection.localDescription.sdp,
                         type: peerConnection.localDescription.type,
+                        usb_camera: selectedCameraId,
                         session_id: sessionId,
-                    }),
+                    })
                 });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to start USB camera');
+                }
 
                 const answer = await response.json();
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
 
                 isAnalysisRunning = true;
-                updateStatus('Streaming', 'connected');
 
             } catch (error) {
-                console.error('Error starting webcam:', error);
+                console.error('Error starting USB camera:', error);
                 updateStatus(`Error: ${error.message}`, 'disconnected');
-                stop();
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
                 if (!userInitiatedStop && !isAutoReconnecting) {
                     attemptAutoReconnect(startWebcam);
                 }
@@ -2531,11 +2515,47 @@
         // depth camera, same recvonly pattern as RTSP. Shares the same
         // OrbbecCameraManager singleton as the /depth page, so this and a
         // /depth session can run concurrently off the same open device.
+        // The GMSL camera's first open after sitting unused often fails and
+        // works on a retry a few seconds later (see orbbec_source.py
+        // WARMUP_WINDOW_S). Polls /api/orbbec/ready, showing an "Initializing
+        // GMSL camera" notice with the time left over the video meanwhile.
+        // Resolves true once the camera is open, false if the user pressed
+        // Stop; throws on a real error or once the server gives up.
+        async function waitForGmslCamera() {
+            const overlay = document.getElementById('gmslWarmup');
+            const countdown = document.getElementById('gmslWarmupCountdown');
+            const formatTime = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+            try {
+                while (!userInitiatedStop) {
+                    const response = await fetch('/api/orbbec/ready');
+                    const data = await response.json();
+                    if (data.ready) return true;
+                    if (!data.warming_up) {
+                        throw new Error(data.error || 'Failed to connect to Orbbec camera');
+                    }
+
+                    updateStatus('Initializing GMSL camera...', 'processing');
+                    overlay.classList.add('show');
+                    const deadline = Date.now() + data.remaining * 1000;
+                    const retryAt = Date.now() + data.retry_after * 1000;
+                    while (!userInitiatedStop && Date.now() < retryAt) {
+                        countdown.textContent = formatTime(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+                        await new Promise((resolve) => setTimeout(resolve, 250));
+                    }
+                }
+                return false;
+            } finally {
+                overlay.classList.remove('show');
+            }
+        }
+
         async function startOrbbec() {
             try {
                 if (!websocket || websocket.readyState !== WebSocket.OPEN) {
                     connectWebSocket();
                 }
+
+                if (!await waitForGmslCamera()) return;
 
                 updateStatus('Connecting to Orbbec camera...', 'processing');
 

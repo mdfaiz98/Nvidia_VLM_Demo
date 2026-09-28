@@ -41,8 +41,14 @@ from aiortc import (
 from aiortc.contrib.media import MediaRelay
 
 from .gpu_monitor import create_monitor
-from .orbbec_source import OrbbecColorTrack, OrbbecDeviceNotFoundError, get_orbbec_manager
+from .orbbec_source import (
+    OrbbecColorTrack,
+    OrbbecDeviceNotFoundError,
+    OrbbecWarmingUpError,
+    get_orbbec_manager,
+)
 from .rtsp_track import RTSPVideoTrack
+from .usb_camera import UsbCameraError, UsbCameraTrack, get_usb_camera, list_usb_cameras
 from .video_file_track import VideoFileTrack
 from .video_processor import VideoProcessorTrack
 from .vlm_service import VLMService
@@ -274,6 +280,50 @@ async def depth_script(request):
     path = os.path.join(os.path.dirname(__file__), "static", "depth.js")
     content = open(path, "r").read()
     return web.Response(content_type="text/javascript", text=content, headers={"Cache-Control": "no-store"})
+
+
+async def usb_camera_list(request):
+    """
+    USB webcams the server can capture from (GMSL nodes excluded).
+
+    GET /api/usbcam/list -> {"cameras": [{"device": "/dev/video8", "name": "..."}]}
+    """
+    return web.json_response({"cameras": list_usb_cameras()})
+
+
+async def orbbec_ready(request):
+    """
+    Try to open the Orbbec camera and report whether it is ready.
+
+    Both pages poll this before streaming, so the GMSL camera's slow first
+    open (see orbbec_source.WARMUP_WINDOW_S) shows as "Initializing GMSL
+    camera" with a countdown instead of an error.
+
+    GET /api/orbbec/ready
+    200 {"ready": true, "device": {...}}
+    503 {"ready": false, "warming_up": true, "retry_after": <s>, "remaining": <s>}
+    404/500 {"ready": false, "error": "..."}
+    """
+    try:
+        device = get_orbbec_manager().start()
+    except OrbbecWarmingUpError as e:
+        return web.json_response(
+            {
+                "ready": False,
+                "warming_up": True,
+                "retry_after": e.retry_after,
+                "remaining": e.remaining,
+            },
+            status=503,
+        )
+    except OrbbecDeviceNotFoundError as e:
+        return web.json_response({"ready": False, "error": str(e)}, status=404)
+    except Exception as e:
+        logger.error(f"Failed to start Orbbec camera: {e}")
+        return web.json_response(
+            {"ready": False, "error": f"Failed to start Orbbec camera: {e}"}, status=500
+        )
+    return web.json_response({"ready": True, "device": device})
 
 
 async def orbbec_ws(request):
@@ -722,6 +772,7 @@ async def offer(request):
     rtsp_url = params.get("rtsp_url")  # Optional RTSP URL for IP camera mode
     video_file_path = params.get("video_file_path")  # Optional local video file mode
     use_orbbec = params.get("orbbec")  # Optional Orbbec depth camera Color stream
+    usb_camera = params.get("usb_camera")  # Optional server-side USB webcam, e.g. "/dev/video8"
     session_id = params.get("session_id", "default")
 
     session = get_or_create_session(session_id)
@@ -851,6 +902,25 @@ async def offer(request):
                 status=500,
                 content_type="application/json",
                 text=json.dumps({"error": f"Failed to start Orbbec camera: {str(e)}"}),
+            )
+    elif usb_camera:
+        logger.info(f"[{session_id}] Creating USB camera track for {usb_camera}")
+        try:
+            usb_track = UsbCameraTrack(get_usb_camera(usb_camera))
+            rtsp_cleanup_track = usb_track  # stop() releases the shared device
+
+            processor_track = VideoProcessorTrack(
+                relay.subscribe(usb_track), session_vlm, text_callback=session_callback
+            )
+            pc.addTrack(processor_track)
+            logger.info("Added USB camera processor track to peer connection")
+
+        except Exception as e:
+            logger.error(f"Failed to create USB camera track: {e}")
+            return web.Response(
+                status=500,
+                content_type="application/json",
+                text=json.dumps({"error": f"Failed to start USB camera: {str(e)}"}),
             )
     else:
         # Webcam mode: wait for browser to send track
@@ -1251,6 +1321,10 @@ async def create_app(test_mode=False):
     app.router.add_get("/depth.css", depth_style)
     app.router.add_get("/depth.js", depth_script)
     app.router.add_get("/ws/orbbec", orbbec_ws)
+    app.router.add_get("/api/orbbec/ready", orbbec_ready)
+
+    # Server-side USB webcam
+    app.router.add_get("/api/usbcam/list", usb_camera_list)
 
     # Serve static files (images, etc.)
     # Always serve from static/images within the package (works for both pip and dev installs)

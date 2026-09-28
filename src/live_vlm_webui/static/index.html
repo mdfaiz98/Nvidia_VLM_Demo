@@ -565,6 +565,14 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
                 <video id="videoElement" autoplay playsinline muted></video>
                 <div class="video-overlay" id="videoOverlay"></div>
+
+                <!-- GMSL camera warm-up notice (shown while the server retries a slow first camera open) -->
+                <div class="gmsl-warmup" id="gmslWarmup">
+                    <div class="gmsl-warmup-spinner"></div>
+                    <div class="gmsl-warmup-title">Initializing GMSL camera</div>
+                    <div class="gmsl-warmup-text">Please wait - this usually takes a few seconds, at most 2 minutes.</div>
+                    <div class="gmsl-warmup-countdown" id="gmslWarmupCountdown"></div>
+                </div>
             </div>
 
             <!-- Generation Result -->

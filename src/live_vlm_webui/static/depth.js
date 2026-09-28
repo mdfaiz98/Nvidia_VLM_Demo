@@ -454,10 +454,59 @@
         await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
     }
 
+    // The GMSL camera's first open after sitting unused often fails and
+    // works on a retry a few seconds later (see orbbec_source.py
+    // WARMUP_WINDOW_S). Polls /api/orbbec/ready, showing "Initializing GMSL
+    // camera" with the time left in the status bar and empty panels
+    // meanwhile; the Start button becomes Cancel. Resolves true once the
+    // camera is open, false if cancelled; throws on a real error or once the
+    // server gives up.
+    let waitingForCamera = false;
+    let cancelCameraWait = false;
+    const emptyLabels = ['colorEmpty', 'depthEmpty', 'irEmpty'].map((id) => document.getElementById(id));
+
+    async function waitForGmslCamera() {
+        waitingForCamera = true;
+        cancelCameraWait = false;
+        try {
+            while (!cancelCameraWait) {
+                const response = await fetch('/api/orbbec/ready');
+                const data = await response.json();
+                if (data.ready) return true;
+                if (!data.warming_up) {
+                    throw new Error(data.error || 'Failed to connect to Orbbec camera');
+                }
+
+                startStopLabel.textContent = 'Cancel';
+                startStopBtn.disabled = false;
+                const deadline = Date.now() + data.remaining * 1000;
+                const retryAt = Date.now() + data.retry_after * 1000;
+                while (!cancelCameraWait && Date.now() < retryAt) {
+                    const secs = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+                    const time = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+                    setStatus(`Initializing GMSL camera - please wait, usually a few seconds (up to ${time})`, 'processing');
+                    emptyLabels.forEach((el) => { el.textContent = `Initializing GMSL camera… ${time}`; });
+                    await new Promise((resolve) => setTimeout(resolve, 250));
+                }
+            }
+            return false;
+        } finally {
+            waitingForCamera = false;
+            startStopLabel.textContent = 'Start';
+            emptyLabels.forEach((el) => { el.textContent = 'Press Start to connect'; });
+        }
+    }
+
     async function start() {
         setStatus('Connecting…', 'processing');
         startStopBtn.disabled = true;
         try {
+            if (!await waitForGmslCamera()) {
+                setStatus('Not connected');
+                return;
+            }
+            startStopBtn.disabled = true;
+            setStatus('Connecting…', 'processing');
             connectMainSocket();
             connectOrbbecSocket();
             await connectColor();
@@ -510,7 +559,9 @@
     }
 
     startStopBtn.addEventListener('click', () => {
-        if (running) {
+        if (waitingForCamera) {
+            cancelCameraWait = true;
+        } else if (running) {
             stop();
         } else {
             start();

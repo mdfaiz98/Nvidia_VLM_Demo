@@ -39,8 +39,28 @@ MIN_DEPTH_MM = 20
 MAX_DEPTH_MM = 10000
 
 
+# The first open of the GMSL camera after it has sat unused for a while (after
+# power-on, or minutes after the last stream stopped) often fails with
+# "Property not found for aliasing", and a retry a few seconds later works
+# (seen 2026-09-28 at 13:48:17 and 13:57:26, each followed by a successful
+# start within ~15 s). Failures within WARMUP_WINDOW_S of the first one are
+# reported as warm-up, so the UI shows "Initializing GMSL camera" and retries
+# instead of showing an error.
+WARMUP_WINDOW_S = 120
+WARMUP_RETRY_S = 3
+
+
 class OrbbecDeviceNotFoundError(RuntimeError):
     """Raised when no Orbbec device is connected."""
+
+
+class OrbbecWarmingUpError(RuntimeError):
+    """Raised when the camera can't be opened yet because the system only just booted."""
+
+    def __init__(self, message: str, retry_after: int, remaining: int):
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.remaining = remaining
 
 
 def _frame_to_bgr_image(frame) -> Optional[np.ndarray]:
@@ -143,16 +163,37 @@ class OrbbecCameraManager:
         # could swallow the other's wakeup and delay it by a frame.
         self._new_frame = threading.Condition(self._lock)
         self._started = False
+        self._warmup_started_at: Optional[float] = None
 
     def start(self) -> dict:
         """
         Open the device and start Color+Depth+IR (single pipeline, async
         callback) plus Accel+Gyro (separate pipeline - IMU is a distinct
         sensor group in the SDK). Returns the device info dict.
-        Raises OrbbecDeviceNotFoundError if nothing is connected.
+        Raises OrbbecWarmingUpError while failures are still within
+        WARMUP_WINDOW_S of the first one, otherwise OrbbecDeviceNotFoundError
+        if nothing is connected.
         """
         if self._started:
             return self._device_info
+
+        try:
+            info = self._start()
+        except Exception as e:
+            now = time.monotonic()
+            if self._warmup_started_at is None:
+                self._warmup_started_at = now
+            remaining = WARMUP_WINDOW_S - (now - self._warmup_started_at)
+            if remaining <= 0:
+                # Give up; the next start() gets a fresh window.
+                self._warmup_started_at = None
+                raise
+            logger.info("Orbbec camera not ready yet (%ds left to retry): %s", remaining, e)
+            raise OrbbecWarmingUpError(str(e), WARMUP_RETRY_S, int(remaining)) from e
+        self._warmup_started_at = None
+        return info
+
+    def _start(self) -> dict:
 
         from pyorbbecsdk import Config, Context, OBError, OBSensorType, Pipeline
 

@@ -427,8 +427,12 @@ async def models(request):
 
             temp_client = AsyncOpenAI(base_url=api_base, api_key=api_key if api_key else "EMPTY")
             models_response = await temp_client.models.list()
+            # Mark the server's --model as current - otherwise app.js auto-picks
+            # the first entry, and Ollama lists the newest model first (e.g. the
+            # Hermes agent's gemma4-orin, which then OOMs on video frames).
+            default_model = get_or_create_session("default")["vlm_service"].model
             models_list = [
-                {"id": model.id, "name": model.id, "current": False}
+                {"id": model.id, "name": model.id, "current": model.id == default_model}
                 for model in models_response.data
             ]
             return web.Response(

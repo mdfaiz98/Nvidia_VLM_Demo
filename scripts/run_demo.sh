@@ -27,6 +27,7 @@ API_BASE="http://localhost:11434/v1"
 UI_PORT="8090"
 UI_URL="https://localhost:${UI_PORT}"
 WEBUI_PATTERN="live-vlm-webui --port ${UI_PORT}"
+source "$REPO_DIR/scripts/demo_services.sh"
 
 echo "== VLM Demo: starting =="
 echo "Version: $BRANCH ($REPO_DIR)"
@@ -70,9 +71,13 @@ if [ -n "$WEBUI_PID" ]; then
         echo "Another version is running ($RUNNING_DIR) - stopping it..."
         pkill -f "$WEBUI_PATTERN"
         while pgrep -f "$WEBUI_PATTERN" >/dev/null 2>&1; do sleep 0.5; done
+        stop_demo_services "$RUNNING_DIR"
         WEBUI_PID=""
     fi
 fi
+
+# Extra services this version needs (scripts/demo_services, if any).
+start_demo_services "$REPO_DIR"
 
 if [ -n "$WEBUI_PID" ]; then
     echo "Webui already running."

@@ -30,13 +30,22 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Cap the long side of frames sent to the VLM. Qwen2.5-VL (and similar
-# native/dynamic-resolution vision encoders) scale the number of vision
-# tokens roughly linearly with input pixel count, so sending a full 720p+
-# webcam frame costs much more prefill compute than the extra detail is
-# usually worth for a one-sentence scene description. 768px keeps enough
-# detail for typical prompts while cutting vision-token count substantially.
-MAX_IMAGE_DIMENSION = 768
+# Cap the long side of frames sent to the VLM. Measured on this Jetson with
+# qwen2.5vl:3b via Ollama (which rescales images itself before the vision
+# encoder): 768px -> 1069 input tokens / 3.17s prefill, 1024px -> 1112 /
+# 3.25s, native 1280x720 -> 1233 / 3.78s. 1024px gets most of the extra
+# detail for ~0.08s; full resolution costs ~0.6s more per answer.
+MAX_IMAGE_DIMENSION = 1024
+
+# JPEG quality for the re-encode. PIL's default (75) stacks visible
+# artifacts on top of the camera's own MJPEG compression; 90 costs nothing
+# measurable in latency.
+JPEG_QUALITY = 90
+
+# Sampling temperature. 0.7 let qwen2.5vl:3b sometimes pick an unlikely
+# "yes" on presence questions (claimed a phone in 2 of 6 runs on a frame
+# with none); 0.2 answered correctly 6/6, with no latency cost.
+TEMPERATURE = 0.2
 
 
 class VLMService:
@@ -105,7 +114,7 @@ class VLMService:
 
             # Convert PIL Image to base64
             img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format="JPEG")
+            image.save(img_byte_arr, format="JPEG", quality=JPEG_QUALITY)
             img_byte_arr = img_byte_arr.getvalue()
             img_base64 = base64.b64encode(img_byte_arr).decode("utf-8")
 
@@ -140,7 +149,7 @@ class VLMService:
                 "model": self.model,
                 "messages": messages_debug,
                 "max_tokens": self.max_tokens,
-                "temperature": 0.7,
+                "temperature": TEMPERATURE,
             }
 
             # Omit this optional parameter for backends that do not support it.
@@ -154,7 +163,7 @@ class VLMService:
                 model=self.model,
                 messages=messages,
                 max_tokens=self.max_tokens,
-                temperature=0.7,
+                temperature=TEMPERATURE,
                 extra_body=request_options,
             )
 

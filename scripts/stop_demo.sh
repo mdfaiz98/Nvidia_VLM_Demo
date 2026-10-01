@@ -1,26 +1,18 @@
 #!/bin/bash
-# Stops the VLM demo started by run_demo.sh - kills Ollama and the webui by
-# matching their exact launch command lines (the same processes run_demo.sh
-# backgrounds), not by port alone, so this can't accidentally kill an
-# unrelated process that happens to be listening on the same port.
+# Stops the VLM demo started by run_demo.sh - whichever version (worktree) is
+# running - by matching the webui's exact launch command line, not by port
+# alone, so this can't accidentally kill an unrelated process that happens to
+# be listening on the same port.
+#
+# Ollama is left running: it's the ollama.service systemd unit, shared with
+# the Hermes agent (`sudo systemctl stop ollama` if you really want it off).
 
-OLLAMA_PATTERN="ollama/bin/ollama serve"
 WEBUI_PATTERN="live-vlm-webui --port 8090"
 
-stopped_any=false
-
 if pgrep -f "$WEBUI_PATTERN" >/dev/null 2>&1; then
+    RUNNING_DIR="$(readlink -f "/proc/$(pgrep -f "$WEBUI_PATTERN" | head -1)/cwd" 2>/dev/null)"
     pkill -f "$WEBUI_PATTERN"
-    echo "Webui stopped."
-    stopped_any=true
-fi
-
-if pgrep -f "$OLLAMA_PATTERN" >/dev/null 2>&1; then
-    pkill -f "$OLLAMA_PATTERN"
-    echo "Ollama stopped."
-    stopped_any=true
-fi
-
-if [ "$stopped_any" = false ]; then
+    echo "Webui stopped (${RUNNING_DIR:-unknown folder})."
+else
     echo "Demo wasn't running."
 fi

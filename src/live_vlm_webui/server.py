@@ -19,16 +19,21 @@ Main server that handles WebRTC connections and serves the web interface
 """
 
 import asyncio
+import glob
 import ipaddress
 import json
 import logging
 import os
+import platform
+import re
+import shutil
 import signal
 import socket
 import subprocess
 import sys
 import uuid
 from collections import defaultdict
+from typing import Optional
 
 import aiohttp
 from aiohttp import web
@@ -245,6 +250,156 @@ async def index(request):
         )
 
     return web.Response(content_type="text/html", text=content, headers={"Cache-Control": "no-store"})
+
+
+# AFE-R750 datasheet (Advantech, "AFE-R750_DS", last updated 12-Jun-2026), AGX Orin
+# 32GB column (AFE-R750-X2A1U), shown in the page's Platform panel on this box.
+AFE_R750_32GB_SPECS = {
+    "name": "Advantech AFE-R750",
+    "tagline": "NVIDIA Jetson AGX Orin 32GB AMR Control System",
+    "datasheet": "AFE-R750 datasheet, last updated 12-Jun-2026",
+    "sections": [
+        ["Compute", [
+            ["Module", "NVIDIA Jetson AGX Orin 32GB"],
+            ["CPU", "8-core NVIDIA Arm Cortex-A78AE v8.2"],
+            ["GPU", "1792-core NVIDIA Ampere with 56 Tensor Cores, up to 930 MHz"],
+            ["AI performance", "Up to 200 sparse TOPS (INT8)"],
+            ["Memory", "32 GB 256-bit LPDDR5"],
+            ["Storage", "64 GB eMMC 5.1 + M.2 M-Key 2280 (PCIe x4)"],
+        ]],
+        ["I/O", [
+            ["Display", "1x HDMI 2.0, up to 3840 x 2160 @ 24 Hz"],
+            ["Ethernet", "4x 2.5GbE RJ-45 (Intel i226)"],
+            ["USB", "4x USB 3.2 Type-A + 1x Type-C (system recovery)"],
+            ["Serial / CAN", "2x RS-232/422/485, 2x isolated CAN FD (1/2 Mbps)"],
+            ["GPIO", "16-bit isolated DIO"],
+            ["Cameras", "4 or 8x GMSL FAKRA (optional)"],
+            ["Expansion", "M.2 E-Key 2230 (PCIe x1, USB 2), M.2 B-Key 3042/3052 (PCIe x1, USB 2, SIM)"],
+            ["Sensors", "Bosch BMI088 6-axis IMU on board; optional Xsens MTi3 9-axis AHRS"],
+            ["Board", "TPM 2.0, GPS PPS time sync (optional)"],
+        ]],
+        ["Power & mechanical", [
+            ["Power input", "20-28 V DC, ATX/AT (ATX default)"],
+            ["TDP", "15-40 W"],
+            ["Operating temp.", "-10 to 60 C (0.7 m/s airflow)"],
+            ["Vibration", "3 Grms @ 5-500 Hz"],
+            ["Size / weight", "177 x 174 x 80 mm, 2.66 kg, wall mount"],
+            ["Certification", "CE / FCC Class B, CB, UL, CCC, BSMI"],
+            ["OS", "Ubuntu 22.04 LTS with JetPack 6.1, Advantech Robotic Suite (ROS 2)"],
+        ]],
+    ],
+}
+
+# Jetson AGX Orin 32GB module specs (NVIDIA Jetson AGX Orin series datasheet),
+# for an AGX Orin 32GB in any other carrier board. Module only - no carrier I/O.
+AGX_ORIN_32GB_SPECS = {
+    "name": "NVIDIA Jetson AGX Orin 32GB",
+    "tagline": "Ampere GPU edge AI module",
+    "datasheet": "NVIDIA Jetson AGX Orin series module datasheet",
+    "sections": [
+        ["Compute", [
+            ["AI performance", "200 TOPS (INT8, sparse)"],
+            ["GPU", "1792-core NVIDIA Ampere with 56 Tensor Cores, up to 930 MHz"],
+            ["DL accelerators", "2x NVDLA v2.0"],
+            ["Vision accelerator", "PVA v2.0"],
+            ["CPU", "8-core Arm Cortex-A78AE, up to 2.2 GHz"],
+            ["Memory", "32 GB 256-bit LPDDR5, 204.8 GB/s"],
+            ["Storage", "64 GB eMMC 5.1"],
+        ]],
+        ["Power", [
+            ["Module power", "15 W - 40 W (power modes)"],
+        ]],
+    ],
+}
+
+_runtime_version_cache: Optional[dict] = None
+
+
+def _runtime_versions() -> dict:
+    """Ollama and JetPack (L4T) versions, read once and cached."""
+    global _runtime_version_cache
+    if _runtime_version_cache is None:
+        out = {}
+        try:
+            text = subprocess.run(["ollama", "--version"], capture_output=True, text=True, timeout=5).stdout
+            m = re.search(r"version is (\S+)", text)
+            if m:
+                out["ollama"] = m.group(1)
+        except Exception:
+            pass
+        m = re.search(r"R(\d+)\s*\(release\),\s*REVISION:\s*([\d.]+)", _read_text("/etc/nv_tegra_release"))
+        if m:
+            out["l4t"] = f"R{m.group(1)}.{m.group(2)}"
+        _runtime_version_cache = out
+    return _runtime_version_cache
+
+
+def _read_text(path: str) -> str:
+    try:
+        with open(path) as f:
+            return f.read().replace("\0", "").strip()
+    except OSError:
+        return ""
+
+
+async def platform_info(request):
+    """Static + live platform facts for the page's Platform panel: datasheet
+    specs (AFE-R750, or the bare AGX Orin 32GB module), board / OS / kernel, memory, storage, network
+    addresses, uptime, CPU clocks, and the AI stack the demo is using."""
+    board = _read_text("/proc/device-tree/model") or _read_text("/sys/class/dmi/id/product_name")
+    os_pretty = ""
+    for line in _read_text("/etc/os-release").splitlines():
+        if line.startswith("PRETTY_NAME="):
+            os_pretty = line.split("=", 1)[1].strip('"')
+    mem = {}
+    for line in _read_text("/proc/meminfo").splitlines():
+        k, v = line.split(":", 1)
+        mem[k] = int(v.split()[0]) / 1024 / 1024
+    disk = shutil.disk_usage("/")
+    max_khz = [int(_read_text(f)) for f in glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq")
+               if _read_text(f).isdigit()]
+    ips = []
+    try:
+        result = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=1)
+        ips = [ip for ip in result.stdout.split() if ":" not in ip and not ip.startswith(("127.", "172.17.", "10.10."))]
+    except Exception:
+        pass
+    uptime_s = float((_read_text("/proc/uptime").split() or ["0"])[0])
+    versions = _runtime_versions()
+    ram_total_gb = mem.get("MemTotal", 0)
+    is_agx_orin_32gb = "AGX ORIN" in board.upper() and 28 <= ram_total_gb <= 33
+    # The AFE-R750 reports the devkit's device-tree model, so recognise it by hostname
+    is_afe_r750 = "AFER750" in (board + socket.gethostname()).replace("-", "").upper()
+    if is_agx_orin_32gb:
+        specs = AFE_R750_32GB_SPECS if is_afe_r750 else AGX_ORIN_32GB_SPECS
+    else:
+        specs = None
+    api_base = default_vlm_config.get("api_base") or ""
+    uses_ollama = ":11434" in api_base
+    return web.json_response({
+        "specs": specs,
+        "live": {
+            "hostname": socket.gethostname(),
+            "board": board,
+            "os": os_pretty,
+            "kernel": platform.release(),
+            "l4t": versions.get("l4t"),
+            "uptime_s": uptime_s,
+            "cpu_cores": os.cpu_count(),
+            "cpu_max_ghz": round(max(max_khz) / 1e6, 2) if max_khz else None,
+            "ram_total_gb": round(ram_total_gb, 1),
+            "ram_used_gb": round(ram_total_gb - mem.get("MemAvailable", 0), 1),
+            "disk_total_gb": round(disk.total / 1e9),
+            "disk_used_gb": round(disk.used / 1e9),
+            "ips": ips,
+        },
+        "ai": {
+            "model": default_vlm_config.get("model"),
+            "runtime": "Ollama (llama.cpp, CUDA)" if uses_ollama else None,
+            "ollama": versions.get("ollama") if uses_ollama else None,
+            "accelerator": "Ampere GPU (CUDA)" if versions.get("l4t") else None,
+        },
+    })
 
 
 async def app_style(request):
@@ -1309,6 +1464,7 @@ async def create_app(test_mode=False):
     app.router.add_get("/app.js", app_script)
     app.router.add_get("/models", models)
     app.router.add_get("/detect-services", detect_services)
+    app.router.add_get("/api/platform", platform_info)
     app.router.add_get("/ws", websocket_handler)
     app.router.add_post("/offer", offer)
 

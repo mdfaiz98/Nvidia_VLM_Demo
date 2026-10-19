@@ -58,6 +58,9 @@ limitations under the License.
             <button class="settings-btn" id="pageFullscreenBtn" title="Toggle fullscreen">
                 <i data-lucide="maximize" id="pageFullscreenIcon"></i>
             </button>
+            <button class="settings-btn" id="platformBtn" title="Platform: hardware specs and live stats" aria-label="Platform">
+                <i data-lucide="cpu"></i>
+            </button>
             <button class="settings-btn" id="helpBtn" title="Guided tour of the UI">
                 <i data-lucide="help-circle"></i>
             </button>
@@ -70,6 +73,32 @@ limitations under the License.
                 </span>
                 <span id="themeText">Dark</span>
             </button>
+        </div>
+    </div>
+
+    <!-- Platform Modal: datasheet specs + live board / AI stack stats -->
+    <div class="settings-modal" id="platformModal">
+        <div class="settings-dialog platform-dialog">
+            <div class="settings-header">
+                <div class="settings-title">
+                    <i data-lucide="cpu"></i> <span id="platformTitle">Platform</span>
+                </div>
+                <button class="settings-close" id="platformClose">×</button>
+            </div>
+            <div class="platform-body">
+                <div class="platform-tagline" id="platformTagline"></div>
+                <div class="platform-highlights" id="platformHighlights"></div>
+                <div class="platform-columns">
+                    <section class="platform-section">
+                        <h3>Live on this board</h3>
+                        <table class="platform-table" id="platformLive"></table>
+                        <h3>AI stack</h3>
+                        <table class="platform-table" id="platformAi"></table>
+                    </section>
+                    <section class="platform-section" id="platformSpecs"></section>
+                </div>
+                <div class="platform-source" id="platformSource"></div>
+            </div>
         </div>
     </div>
 
@@ -586,9 +615,23 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                             Model: <span id="modelName" style="font-weight: 600; color: var(--accent-color);">--</span>
                         </div>
                     </div>
-                    <div style="display: flex; align-items: center; gap: 16px;">
+                    <div class="result-metrics-row">
                         <div class="metrics-inline" id="metricsInline" style="display: none;">
-                            <div class="metric-item">
+                            <div class="metric-item" title="Time to first token: from sending the frame until the first word of the answer arrives">
+                                <span>TTFT:</span>
+                                <span class="metric-value" id="ttftValue">--</span>
+                                <span>ms</span>
+                            </div>
+                            <div class="metric-item" title="Generation speed: tokens per second once the answer has started">
+                                <span>Speed:</span>
+                                <span class="metric-value" id="tokensPerSecValue">--</span>
+                                <span>tok/s</span>
+                            </div>
+                            <div class="metric-item" title="Tokens in the last answer">
+                                <span>Tokens:</span>
+                                <span class="metric-value" id="tokensValue">--</span>
+                            </div>
+                            <div class="metric-item" title="End-to-end: from sending the frame until the whole answer has arrived">
                                 <span>Latency:</span>
                                 <span class="metric-value" id="latencyValue">--</span>
                                 <span>ms</span>
@@ -677,23 +720,6 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
 
                     <div class="stat-card">
                         <div class="stat-header">
-                            <span class="stat-label">GPU Utilization</span>
-                        </div>
-                        <div class="ring-gauge-wrapper">
-                            <svg class="ring-gauge" viewBox="0 0 100 100">
-                                <circle class="ring-track" cx="50" cy="50" r="42"></circle>
-                                <circle class="ring-fill gpu" id="gpuRing" cx="50" cy="50" r="42"
-                                        stroke-dasharray="263.9" stroke-dashoffset="263.9"></circle>
-                            </svg>
-                            <div class="ring-center-text">
-                                <span class="stat-value" id="gpuUtil">--%</span>
-                            </div>
-                        </div>
-                        <canvas id="gpuUtilSparkline" class="sparkline"></canvas>
-                    </div>
-
-                    <div class="stat-card">
-                        <div class="stat-header">
                             <span class="stat-label">System RAM</span>
                         </div>
                         <div class="ring-gauge-wrapper">
@@ -707,6 +733,47 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                             </div>
                         </div>
                         <canvas id="ramSparkline" class="sparkline"></canvas>
+                    </div>
+
+                    <!-- Accelerator + Thermal: same row as the Qualcomm IQ9 demo, so the two boards
+                         read side by side. Here the VLM runs on the GPU (the IQ9's runs on its NPU). -->
+                    <div class="stat-card accel-card" id="accelCard">
+                        <div class="stat-header">
+                            <span class="stat-label">AI Accelerator &middot; GPU</span>
+                        </div>
+                        <div class="ring-gauge-wrapper" title="Ampere GPU load, all programs (desktop, browser, this app) - from jtop. The VLM runs here.">
+                            <svg class="ring-gauge" viewBox="0 0 100 100">
+                                <circle class="ring-track" cx="50" cy="50" r="42"></circle>
+                                <circle class="ring-fill gpu" id="gpuRing" cx="50" cy="50" r="42"
+                                        stroke-dasharray="263.9" stroke-dashoffset="263.9"></circle>
+                            </svg>
+                            <div class="ring-center-text">
+                                <span class="stat-value" id="gpuUtil">--%</span>
+                            </div>
+                        </div>
+                        <div class="accel-caption">Ampere GPU &middot; <span id="gpuFreq">-- MHz</span> &middot; runs the VLM</div>
+                        <canvas id="accelChart" class="sparkline"></canvas>
+                    </div>
+
+                    <div class="stat-card thermal-card">
+                        <div class="stat-header">
+                            <span class="stat-label">Thermal</span>
+                            <div class="thermal-legend">
+                                <span class="thermal-legend-item">
+                                    <span class="thermal-legend-swatch" style="background:var(--thermal-cpu);"></span>
+                                    CPU: <span id="cpuTempValue">-- &deg;C</span>
+                                </span>
+                                <span class="thermal-legend-item">
+                                    <span class="thermal-legend-swatch" style="background:var(--thermal-igpu);"></span>
+                                    GPU: <span id="gpuTempValue">-- &deg;C</span>
+                                </span>
+                                <span class="thermal-legend-item">
+                                    <span class="thermal-legend-swatch" style="background:var(--thermal-npu);"></span>
+                                    SoC: <span id="socTempValue">-- &deg;C</span>
+                                </span>
+                            </div>
+                        </div>
+                        <canvas id="thermalChart" class="thermal-chart"></canvas>
                     </div>
                 </div>
             </div>

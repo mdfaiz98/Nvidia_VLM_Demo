@@ -18,6 +18,7 @@ GPU Monitoring Module
 Supports multiple platforms: NVIDIA (NVML), Jetson Thor (jtop), Jetson Orin (jtop), Apple Silicon, AMD
 """
 
+import glob
 import logging
 import os
 import platform
@@ -227,11 +228,11 @@ def get_system_product_info() -> Dict[str, Optional[str]]:
 
 def get_thermal_stats() -> Dict[str, Optional[float]]:
     """
-    Read CPU / GPU / NPU temperatures from Linux thermal zones
+    Read CPU / GPU / NPU / SoC temperatures from Linux thermal zones
     (/sys/class/thermal/thermal_zone*/{type,temp}). Generic sysfs, not
     vendor-specific - matches this Jetson's zone names (cpu-thermal,
-    gpu-thermal, ...) as well as Qualcomm's (cpu-*-thermal, gpuss-*-thermal,
-    nsp-*-thermal for the Hexagon NPU).
+    gpu-thermal, soc0..2-thermal) as well as Qualcomm's (cpu-*-thermal,
+    gpuss-*-thermal, nsp-*-thermal for the Hexagon NPU).
 
     Each group is averaged across however many zones match. Returns None for
     any group with no matching zones (e.g. this board has no "nsp-" NPU zone)
@@ -241,13 +242,19 @@ def get_thermal_stats() -> Dict[str, Optional[float]]:
         "cpu_temp_c": None,
         "gpu_temp_c": None,
         "npu_temp_c": None,
+        "soc_temp_c": None,
     }
 
     thermal_root = "/sys/class/thermal"
     if not os.path.isdir(thermal_root):
         return result
 
-    groups: Dict[str, List[float]] = {"cpu_temp_c": [], "gpu_temp_c": [], "npu_temp_c": []}
+    groups: Dict[str, List[float]] = {
+        "cpu_temp_c": [],
+        "gpu_temp_c": [],
+        "npu_temp_c": [],
+        "soc_temp_c": [],
+    }
 
     try:
         for entry in os.listdir(thermal_root):
@@ -270,6 +277,8 @@ def get_thermal_stats() -> Dict[str, Optional[float]]:
                 groups["gpu_temp_c"].append(temp_c)
             elif zone_type.startswith("nsp-"):
                 groups["npu_temp_c"].append(temp_c)
+            elif zone_type.startswith("soc"):
+                groups["soc_temp_c"].append(temp_c)
     except Exception as e:
         logger.debug(f"Error reading thermal zones: {e}")
         return result
@@ -279,6 +288,20 @@ def get_thermal_stats() -> Dict[str, Optional[float]]:
             result[key] = round(sum(values) / len(values), 1)
 
     return result
+
+
+def get_jetson_gpu_freq_mhz() -> Optional[float]:
+    """
+    Current Jetson GPU clock from devfreq (/sys/class/devfreq/<addr>.gpu/cur_freq,
+    in Hz). Generic sysfs, so it works whether or not jtop is up. None if absent.
+    """
+    try:
+        for path in glob.glob("/sys/class/devfreq/*.gpu/cur_freq"):
+            with open(path, "r") as f:
+                return round(int(f.read().strip()) / 1e6, 1)
+    except Exception as e:
+        logger.debug(f"Could not read GPU clock: {e}")
+    return None
 
 
 _static_system_info: Optional[Dict[str, Optional[str]]] = None
@@ -343,6 +366,7 @@ class GPUMonitor(ABC):
         self.emc_util_history = deque(maxlen=history_size)
         self.cpu_temp_history = deque(maxlen=history_size)
         self.gpu_temp_history = deque(maxlen=history_size)
+        self.soc_temp_history = deque(maxlen=history_size)
 
     @abstractmethod
     def get_stats(self) -> Dict:
@@ -398,6 +422,7 @@ class GPUMonitor(ABC):
                 "cpu_temp_c": None,
                 "gpu_temp_c": None,
                 "npu_temp_c": None,
+                "soc_temp_c": None,
                 "os_pretty": None,
                 "l4t_version": None,
             }
@@ -412,6 +437,7 @@ class GPUMonitor(ABC):
         self.emc_util_history.append(stats.get("emc_percent") or 0)
         self.cpu_temp_history.append(stats.get("cpu_temp_c"))
         self.gpu_temp_history.append(stats.get("gpu_temp_c"))
+        self.soc_temp_history.append(stats.get("soc_temp_c"))
 
     def get_history(self) -> Dict[str, List[float]]:
         """Get historical data as lists"""
@@ -424,6 +450,7 @@ class GPUMonitor(ABC):
             "emc_util": list(self.emc_util_history),
             "cpu_temp": list(self.cpu_temp_history),
             "gpu_temp": list(self.gpu_temp_history),
+            "soc_temp": list(self.soc_temp_history),
         }
 
 
@@ -1475,6 +1502,7 @@ class JetsonOrinMonitor(GPUMonitor):
                     "gpu_power_w": power_w,
                     "power_rails": power_rails,
                     "emc_percent": emc_percent,
+                    "gpu_freq_mhz": get_jetson_gpu_freq_mhz(),
                     "board_name": board_name,
                     **system_stats,
                 }

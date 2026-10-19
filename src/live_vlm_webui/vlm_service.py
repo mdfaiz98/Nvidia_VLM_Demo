@@ -88,6 +88,16 @@ class VLMService:
         self.last_inference_time = 0.0  # seconds
         self.total_inferences = 0
         self.total_inference_time = 0.0
+        # Streaming metrics: time to first token, answer length, decode speed
+        self.last_ttft: Optional[float] = None  # seconds
+        self.last_tokens: Optional[int] = None
+        self.last_tokens_per_s: Optional[float] = None
+        self.total_ttft = 0.0
+        self.ttft_count = 0
+        self.total_tokens_per_s = 0.0
+        self.tokens_per_s_count = 0
+        # The answer so far while one is being streamed, else None
+        self.partial_response: Optional[str] = None
 
     async def analyze_image(self, image: Image.Image, prompt: Optional[str] = None) -> str:
         """
@@ -158,49 +168,85 @@ class VLMService:
                 request_options["reasoning_effort"] = self.reasoning_effort
             self._last_request_payload.update(request_options)
 
-            # Call API
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                max_tokens=self.max_tokens,
-                temperature=TEMPERATURE,
-                extra_body=request_options,
-            )
-
-            # Store response payload for debug (serialize to dict)
+            # Call API, streamed: the answer is shown word by word as it's
+            # generated (self.partial_response), and the first token's
+            # arrival gives TTFT - same metrics as the Qualcomm IQ9 demo.
+            pieces: list[str] = []
+            ttft = None
+            usage = None
+            chunks = 0
+            self.partial_response = ""
+            stream = None
             try:
-                self._last_response_payload = (
-                    response.model_dump() if hasattr(response, "model_dump") else response.dict()
+                stream = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=self.max_tokens,
+                    temperature=TEMPERATURE,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                    extra_body=request_options,
                 )
-            except Exception:
-                self._last_response_payload = {
-                    "id": getattr(response, "id", None),
-                    "model": getattr(response, "model", None),
-                    "choices": [
-                        {
-                            "index": getattr(c, "index", i),
-                            "message": {
-                                "role": getattr(getattr(c, "message", None), "role", None),
-                                "content": getattr(getattr(c, "message", None), "content", None),
-                            },
-                            "finish_reason": getattr(c, "finish_reason", None),
-                        }
-                        for i, c in enumerate(getattr(response, "choices", []))
-                    ],
-                    "usage": getattr(response, "usage", None),
-                }
+                async for chunk in stream:
+                    if getattr(chunk, "usage", None):
+                        usage = chunk.usage
+                    for choice in chunk.choices or []:
+                        piece = getattr(choice.delta, "content", None) or ""
+                        if piece:
+                            if ttft is None:
+                                ttft = time.perf_counter() - start_time
+                            pieces.append(piece)
+                            chunks += 1
+                            self.partial_response = "".join(pieces)
+            finally:
+                self.partial_response = None
+                if stream is not None:
+                    await stream.close()
 
             # Calculate latency
             end_time = time.perf_counter()
             inference_time = end_time - start_time
+            tokens = (getattr(usage, "completion_tokens", None) if usage else None) or chunks
+            # Decode speed: tokens after the first one, over the time after the first one
+            tokens_per_s = (
+                (tokens - 1) / (inference_time - ttft)
+                if ttft is not None and tokens > 1 and inference_time > ttft
+                else None
+            )
+            result = "".join(pieces).strip()
+
+            # Store response payload for debug (the streamed answer, reassembled)
+            self._last_response_payload = {
+                "model": self.model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": result}}],
+                "usage": usage.model_dump() if hasattr(usage, "model_dump") else usage,
+                "timings": {
+                    "ttft_ms": round(ttft * 1000) if ttft is not None else None,
+                    "total_ms": round(inference_time * 1000),
+                    "completion_tokens": tokens,
+                    "tokens_per_s": round(tokens_per_s, 1) if tokens_per_s else None,
+                },
+            }
 
             # Update metrics
             self.last_inference_time = inference_time
             self.total_inferences += 1
             self.total_inference_time += inference_time
+            self.last_ttft = ttft
+            self.last_tokens = tokens
+            self.last_tokens_per_s = tokens_per_s
+            if ttft is not None:
+                self.total_ttft += ttft
+                self.ttft_count += 1
+            if tokens_per_s:
+                self.total_tokens_per_s += tokens_per_s
+                self.tokens_per_s_count += 1
 
-            result = response.choices[0].message.content.strip()
-            logger.info(f"VLM response: {result} (latency: {inference_time*1000:.0f}ms)")
+            logger.info(
+                f"VLM response: {result} (latency: {inference_time*1000:.0f}ms, "
+                f"ttft: {ttft*1000 if ttft is not None else -1:.0f}ms, {tokens} tok, "
+                f"{tokens_per_s or 0:.1f} tok/s)"
+            )
             return result
 
         except Exception as e:
@@ -268,6 +314,16 @@ class VLMService:
             "avg_latency_ms": avg_latency * 1000,
             "total_inferences": self.total_inferences,
             "is_processing": self.is_processing,
+            "last_ttft_ms": self.last_ttft * 1000 if self.last_ttft is not None else None,
+            "avg_ttft_ms": self.total_ttft / self.ttft_count * 1000 if self.ttft_count else None,
+            "last_tokens": self.last_tokens,
+            "last_tokens_per_s": self.last_tokens_per_s,
+            "avg_tokens_per_s": (
+                self.total_tokens_per_s / self.tokens_per_s_count if self.tokens_per_s_count else None
+            ),
+            # The answer being generated right now (streamed), for the page to
+            # show word by word; None between answers
+            "partial_text": self.partial_response,
         }
 
     def update_prompt(self, new_prompt: str, max_tokens: Optional[int] = None) -> None:

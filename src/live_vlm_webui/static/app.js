@@ -842,13 +842,13 @@
             },
             {
                 selector: '#metricsInline',
-                title: 'Latency & Count',
-                body: 'Latency is the time the last request took to complete. Avg is the running average. Count is the number of frames processed so far this session. (Only visible once the stream is running and a response has come back - start the stream to see live values here.)'
+                title: 'Speed: TTFT, tok/s, Latency & Count',
+                body: 'TTFT (time to first token) is how long until the first word of the answer arrives. Speed is how many tokens per second the model writes once it has started; Tokens is the length of the last answer. Latency is the time the last request took to complete. Avg is the running average. Count is the number of frames processed so far this session. (Only visible once the stream is running and a response has come back - start the stream to see live values here.)'
             },
             {
                 selector: '#systemStatsCard',
                 title: 'Local System Stats',
-                body: 'Live on-device telemetry: CPU and RAM utilization, plus CPU / iGPU / NPU temperatures over time.'
+                body: 'Live on-device telemetry: CPU and RAM utilization, GPU load (the GPU runs the VLM on this board), plus CPU / GPU / SoC temperatures over time.'
             },
             {
                 selector: '#controlDrawer',
@@ -1092,8 +1092,11 @@
             // Add metrics if available
             const latency = document.getElementById('latencyValue')?.textContent;
             const count = document.getElementById('countValue')?.textContent;
+            const ttft = document.getElementById('ttftValue')?.textContent;
+            const tps = document.getElementById('tokensPerSecValue')?.textContent;
             if (latency && count) {
-                fullscreenVlmMetrics.innerHTML = `<span>Latency: ${latency}ms</span><span>Count: ${count}</span>`;
+                fullscreenVlmMetrics.innerHTML = `<span>TTFT: ${ttft}ms</span><span>Speed: ${tps} tok/s</span>` +
+                    `<span>Latency: ${latency}ms</span><span>Count: ${count}</span>`;
             }
         }
 
@@ -1683,9 +1686,10 @@
             ctx.fill();
         }
 
-        // Multi-series line chart (used for the Thermal card: CPU / iGPU / NPU temps)
+        // Multi-series line chart (Thermal card: CPU / GPU / SoC temps)
         // series: array of { data: number[]|null, color: '#hex' }
-        function drawMultiSparkline(canvas, series) {
+        // fixedRange: optional { min, max } - e.g. 0-100 for percentages; auto-scaled when omitted
+        function drawMultiSparkline(canvas, series, fixedRange = null) {
             const ctx = canvas.getContext('2d');
             const width = canvas.width;
             const height = canvas.height;
@@ -1701,8 +1705,8 @@
             });
             if (allValues.length === 0) return;
 
-            const min = Math.min(...allValues);
-            const max = Math.max(...allValues, min + 1);
+            const min = fixedRange ? fixedRange.min : Math.min(...allValues);
+            const max = fixedRange ? fixedRange.max : Math.max(...allValues, min + 1);
             const range = (max - min) || 1;
             // Small padding so lines don't touch the very top/bottom edge
             const pad = height * 0.1;
@@ -1912,10 +1916,18 @@
                 productImg.style.display = 'none';
             }
 
-            // GPU - circular ring gauge
+            // AI accelerator - the GPU, which runs the VLM on this board (the IQ9 uses its NPU)
             const gpuPercent = stats.gpu_percent || 0;
             updateMetricText(document.getElementById('gpuUtil'), `${gpuPercent.toFixed(1)}%`);
+            updateMetricText(document.getElementById('gpuFreq'),
+                stats.gpu_freq_mhz != null ? `${stats.gpu_freq_mhz.toFixed(0)} MHz` : '-- MHz');
             setRingProgress('gpuRing', gpuPercent, 263.9);
+
+            // Thermal (CPU / GPU / SoC) - current values
+            const fmtTemp = (t) => (t === null || t === undefined) ? 'N/A' : `${t.toFixed(1)}°C`;
+            updateMetricText(document.getElementById('cpuTempValue'), fmtTemp(stats.cpu_temp_c));
+            updateMetricText(document.getElementById('gpuTempValue'), fmtTemp(stats.gpu_temp_c));
+            updateMetricText(document.getElementById('socTempValue'), fmtTemp(stats.soc_temp_c));
 
             // CPU (Blue) - circular ring gauge
             const cpuPercent = stats.cpu_percent || 0;
@@ -1932,9 +1944,10 @@
             // Sparklines
             if (stats.history) {
                 const canvases = {
-                    gpu: document.getElementById('gpuUtilSparkline'),
                     cpu: document.getElementById('cpuSparkline'),
                     ram: document.getElementById('ramSparkline'),
+                    accel: document.getElementById('accelChart'),
+                    thermal: document.getElementById('thermalChart'),
                 };
 
                 // Set canvas dimensions (use offsetWidth with fallback to parent width)
@@ -1949,9 +1962,14 @@
                     }
                 });
 
-                drawSparkline(canvases.gpu, stats.history.gpu_util, themeColor('--thermal-igpu'));
                 drawSparkline(canvases.cpu, stats.history.cpu_util, themeColor('--thermal-cpu'));
                 drawSparkline(canvases.ram, stats.history.ram_used, themeColor('--accent-color-2'));
+                drawSparkline(canvases.accel, stats.history.gpu_util, themeColor('--thermal-igpu'));
+                drawMultiSparkline(canvases.thermal, [
+                    { data: stats.history.cpu_temp, color: themeColor('--thermal-cpu') },
+                    { data: stats.history.gpu_temp, color: themeColor('--thermal-igpu') },
+                    { data: stats.history.soc_temp, color: themeColor('--thermal-npu') },
+                ]);
             }
         }
 
@@ -1978,6 +1996,134 @@
                 }
             }
         }, 50);  // Check every 50ms for smooth updates
+
+        // The answer currently being streamed (null between answers)
+        let streamingText = null;
+
+        // Latency / TTFT / tok/s / tokens / avg / count in the VLM Output header
+        function updateInlineMetrics(m) {
+            window.lastVlmMetrics = m;
+            metricsInline.style.display = 'flex';
+            const fmt = (v, digits = 0) => (v === null || v === undefined) ? '--' : v.toFixed(digits);
+            updateMetricText(latencyValue, fmt(m.last_latency_ms));
+            updateMetricText(avgLatencyValue, fmt(m.avg_latency_ms));
+            updateMetricText(countValue, String(m.total_inferences ?? '--'));
+            updateMetricText(document.getElementById('ttftValue'), fmt(m.last_ttft_ms));
+            updateMetricText(document.getElementById('tokensPerSecValue'), fmt(m.last_tokens_per_s, 1));
+            updateMetricText(document.getElementById('tokensValue'), String(m.last_tokens ?? '--'));
+        }
+
+        // Platform panel: module specs (from /api/platform) + live board,
+        // AI-stack and performance numbers, refreshed every 2 s while open.
+        // Same panel as the Qualcomm IQ9 demo; here the VLM runs on the GPU.
+        const platformModal = document.getElementById('platformModal');
+        let platformData = null;
+        let platformTimer = null;
+
+        function platformRows(rows, liveKeys = []) {
+            const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+            return rows
+                .filter(([, v]) => v !== null && v !== undefined && v !== '')
+                .map(([k, v]) => `<tr><td>${esc(k)}</td><td${liveKeys.includes(k) ? ' class="live-value"' : ''}>${esc(v)}</td></tr>`)
+                .join('');
+        }
+
+        function fmtUptime(s) {
+            const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+            return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`;
+        }
+
+        function renderPlatform() {
+            if (!platformData) return;
+            const { specs, live, ai } = platformData;
+            const st = window.lastSystemStats || {};
+            const vm = window.lastVlmMetrics || {};
+            const n = (v, d = 0, unit = '') => (v === null || v === undefined) ? null : `${Number(v).toFixed(d)}${unit}`;
+
+            document.getElementById('platformTitle').textContent = specs ? specs.name : (live.board || live.hostname);
+            document.getElementById('platformTagline').textContent = specs ? specs.tagline : (live.board || '');
+
+            const hl = specs ? [
+                ['200 TOPS', 'INT8 sparse (GPU + 2 DLA)'],
+                [`${live.cpu_cores || 8} cores`, `Cortex-A78AE · ${live.cpu_max_ghz || 2.2} GHz`],
+                ['32 GB', 'LPDDR5 · 204.8 GB/s'],
+                ['15 – 40 W', 'module power modes'],
+            ] : [];
+            if (st.gpu_power_w != null) hl.push([`${st.gpu_power_w.toFixed(1)} W`, 'module power now (live)']);
+            if (vm.last_ttft_ms != null) hl.push([`${Math.round(vm.last_ttft_ms)} ms`, 'time to first token (live)']);
+            if (vm.last_tokens_per_s != null) hl.push([`${vm.last_tokens_per_s.toFixed(1)} tok/s`, 'generation speed (live)']);
+            document.getElementById('platformHighlights').innerHTML = hl
+                .map(([v, l]) => `<div class="platform-highlight"><div class="ph-value">${v}</div><div class="ph-label">${l}</div></div>`)
+                .join('');
+
+            document.getElementById('platformLive').innerHTML = platformRows([
+                ['Board', live.board],
+                ['Hostname', live.hostname],
+                ['IP address', (live.ips || []).join(', ')],
+                ['OS', live.os],
+                ['JetPack (L4T)', live.l4t],
+                ['Kernel', live.kernel],
+                ['Uptime', fmtUptime(live.uptime_s)],
+                ['CPU load', n(st.cpu_percent, 1, ' %')],
+                ['RAM', (st.ram_used_gb != null && st.ram_total_gb != null) ? `${st.ram_used_gb.toFixed(1)} / ${st.ram_total_gb.toFixed(1)} GB` : `${live.ram_used_gb} / ${live.ram_total_gb} GB`],
+                ['Storage (/)', `${live.disk_used_gb} / ${live.disk_total_gb} GB used`],
+                ['GPU busy', st.gpu_percent != null ? `${st.gpu_percent.toFixed(0)} %${st.gpu_freq_mhz ? ` @ ${st.gpu_freq_mhz.toFixed(0)} MHz` : ''}` : null],
+                ['Module power', n(st.gpu_power_w, 1, ' W')],
+                ['Temperatures', [st.cpu_temp_c != null && `CPU ${st.cpu_temp_c.toFixed(1)}°C`, st.gpu_temp_c != null && `GPU ${st.gpu_temp_c.toFixed(1)}°C`, st.soc_temp_c != null && `SoC ${st.soc_temp_c.toFixed(1)}°C`].filter(Boolean).join(' · ')],
+            ], ['CPU load', 'RAM', 'GPU busy', 'Module power', 'Temperatures', 'Uptime']);
+
+            document.getElementById('platformAi').innerHTML = platformRows([
+                ['Model', ai.model],
+                ['Runs on', ai.accelerator],
+                ['Runtime', ai.runtime],
+                ['Ollama', ai.ollama],
+                ['TTFT', n(vm.last_ttft_ms, 0, ' ms')],
+                ['Generation speed', n(vm.last_tokens_per_s, 1, ' tok/s')],
+                ['Latency (last / avg)', vm.last_latency_ms != null ? `${Math.round(vm.last_latency_ms)} / ${Math.round(vm.avg_latency_ms)} ms` : null],
+                ['Answers so far', vm.total_inferences],
+                ['Inference', 'on this board: no cloud, images and answers stay on the device'],
+            ], ['TTFT', 'Generation speed', 'Latency (last / avg)', 'Answers so far']);
+
+            document.getElementById('platformSpecs').innerHTML = specs
+                ? specs.sections.map(([title, rows]) => `<h3>${title}</h3><table class="platform-table">${platformRows(rows)}</table>`).join('')
+                : '<h3>Datasheet</h3><p style="color: var(--text-secondary); font-size: 13px;">No datasheet on file for this board.</p>';
+            document.getElementById('platformSource').textContent = specs
+                ? `Specs: ${specs.datasheet}. Live values: read from this board.` : 'Live values: read from this board.';
+        }
+
+        async function refreshPlatform() {
+            try {
+                const resp = await fetch('/api/platform', { cache: 'no-store' });
+                platformData = await resp.json();
+            } catch (e) {
+                console.warn('Platform info unavailable:', e);
+            }
+            renderPlatform();
+        }
+
+        function openPlatformModal() {
+            platformModal.classList.add('show');
+            motionAnimate(platformModal, { opacity: [0, 1] }, { duration: 0.15, easing: 'ease-out' });
+            refreshPlatform();
+            clearInterval(platformTimer);
+            platformTimer = setInterval(refreshPlatform, 2000);
+        }
+
+        function closePlatformModal() {
+            clearInterval(platformTimer);
+            platformTimer = null;
+            motionAnimate(platformModal, { opacity: [1, 0] }, { duration: 0.15, easing: 'ease-in' })
+                .then(() => platformModal.classList.remove('show'));
+        }
+
+        document.getElementById('platformBtn').addEventListener('click', openPlatformModal);
+        document.getElementById('platformClose').addEventListener('click', closePlatformModal);
+        platformModal.addEventListener('click', (e) => {
+            if (e.target === platformModal) closePlatformModal();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && platformTimer) closePlatformModal();
+        });
 
         // WebSocket Connection
         function connectWebSocket() {
@@ -2008,6 +2154,26 @@
                 const data = JSON.parse(event.data);
 
                 if (data.type === 'vlm_response') {
+                    // While an answer is being generated, show it word by word.
+                    // It isn't a finished answer yet, so lastText / the history
+                    // feed / the pop-in animation stay untouched until it is.
+                    const partial = data.metrics && data.metrics.partial_text;
+                    if (partial) {
+                        if (partial !== streamingText) {
+                            streamingText = partial;
+                            updateResultText(partial);
+                            videoOverlay.textContent = partial;
+                            resultText.classList.remove('fade');
+                            if (fadeTimeout) {
+                                clearTimeout(fadeTimeout);
+                                fadeTimeout = null;
+                            }
+                            scrollResultToLatest();
+                        }
+                        updateInlineMetrics(data.metrics);
+                        return;
+                    }
+                    streamingText = null;
                     const isNewAnswer = data.text !== lastText;
 
                     // Trigger animations for new messages based on settings
@@ -2064,10 +2230,7 @@
                     videoOverlay.textContent = data.text;
 
                     if (data.metrics) {
-                        metricsInline.style.display = 'flex';
-                        latencyValue.textContent = Math.round(data.metrics.last_latency_ms);
-                        avgLatencyValue.textContent = Math.round(data.metrics.avg_latency_ms);
-                        countValue.textContent = data.metrics.total_inferences;
+                        updateInlineMetrics(data.metrics);
                     }
                     if (data.request_payload) {
                         const block = document.getElementById('requestPayloadDebug');

@@ -677,6 +677,14 @@ async def orbbec_ws(request):
     return ws
 
 
+async def how_it_works_index(request):
+    """Serve the "How it works" explainer (both demos with their diagrams, the
+    technical details and the platform; light/dark, offline), the same page as
+    the IQ9 demo's, linked from Settings and the /traffic settings drawer."""
+    content = open(os.path.join(os.path.dirname(__file__), "static", "how-it-works.html"), "r").read()
+    return web.Response(content_type="text/html", text=content, headers={"Cache-Control": "no-store"})
+
+
 async def guide_index(request):
     """Serve the Orin demo guide (diagrams + technical details + troubleshooting,
     static, offline), linked from the main demo's Settings and /traffic."""
@@ -2092,6 +2100,7 @@ async def create_app(test_mode=False):
     app.router.add_get("/traffic", traffic_index)
     app.router.add_get("/compare", compare_index)
     app.router.add_get("/guide", guide_index)
+    app.router.add_get("/how-it-works", how_it_works_index)
     app.router.add_get("/traffic.css", traffic_style)
     app.router.add_get("/traffic.js", traffic_script)
     app.router.add_get("/api/traffic/ws", traffic_websocket_handler)

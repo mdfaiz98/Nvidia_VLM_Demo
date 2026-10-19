@@ -196,19 +196,19 @@ Self-contained (no fonts or scripts from the internet) so it works offline.
             <figure class="diagram" data-diagram="live-vlm-how-it-works">
                 <div class="diagram-head"><h3>Main demo: from a camera frame to a live answer</h3>
                     <div class="board-switch" role="group" aria-label="Board"><button type="button" data-board="orin" aria-pressed="true">AGX Orin</button><button type="button" data-board="iq9" aria-pressed="false">IQ9</button></div></div>
-                <a href="/images/diagrams/orin-live-vlm-how-it-works.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-live-vlm-how-it-works.png" alt="Main demo diagram: camera feed or video file, frame sampling, prompt, Qwen3-VL-4B, live answer and metrics" loading="lazy"></a>
+                <a href="/images/diagrams/orin-live-vlm-how-it-works.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-live-vlm-how-it-works.png" alt="Main demo diagram: camera feed or video file, frame sampling, prompt, Qwen3-VL-4B, live answer and metrics"></a>
                 <figcaption>Orin: Qwen3-VL-4B on the Ampere GPU (Ollama, llama.cpp CUDA). IQ9: Qwen3-VL-4B on the Hexagon NPU (GenieX).</figcaption>
             </figure>
             <figure class="diagram" data-diagram="cascade-how-it-works">
                 <div class="diagram-head"><h3>Cascade: from camera to searchable vehicle records</h3>
                     <div class="board-switch" role="group" aria-label="Board"><button type="button" data-board="orin" aria-pressed="true">AGX Orin</button><button type="button" data-board="iq9" aria-pressed="false">IQ9</button></div></div>
-                <a href="/images/diagrams/orin-cascade-how-it-works.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-cascade-how-it-works.png" alt="Cascade diagram: camera feed, YOLO detection, track and crop, Qwen3-VL-4B description, record to database and dashboard" loading="lazy"></a>
+                <a href="/images/diagrams/orin-cascade-how-it-works.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-cascade-how-it-works.png" alt="Cascade diagram: camera feed, YOLO detection, track and crop, Qwen3-VL-4B description, record to database and dashboard"></a>
                 <figcaption>Orin: YOLOv8n on DLA 0, Qwen3-VL-4B on the GPU. IQ9: YOLO26n and Qwen3-VL-4B both on the NPU. The database, dashboard and operators show where a deployment would send the records.</figcaption>
             </figure>
             <figure class="diagram" data-diagram="demo-system">
                 <div class="diagram-head"><h3>Full system: every process and the engine it runs on</h3>
                     <div class="board-switch" role="group" aria-label="Board"><button type="button" data-board="orin" aria-pressed="true">AGX Orin</button><button type="button" data-board="iq9" aria-pressed="false">IQ9</button></div></div>
-                <a href="/images/diagrams/orin-demo-system.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-demo-system.png" alt="Full system diagram: browser pages, web server processes, model server, and the AI engines" loading="lazy"></a>
+                <a href="/images/diagrams/orin-demo-system.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-demo-system.png" alt="Full system diagram: browser pages, web server processes, model server, and the AI engines"></a>
                 <figcaption>Orin: Ollama and llama.cpp feed the GPU; TensorRT runs the detector on the DLA. IQ9: the GenieX proxy and server feed the NPU, which runs both models.</figcaption>
             </figure>
         </section>

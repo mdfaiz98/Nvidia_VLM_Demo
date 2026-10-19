@@ -22,10 +22,13 @@ BRANCH="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unk
 MAIN_DIR="$(git -C "$REPO_DIR" worktree list --porcelain 2>/dev/null | awk 'NR==1 {print $2}')"
 VENV="$REPO_DIR/.venv"
 [ -d "$VENV" ] || VENV="${MAIN_DIR:-$REPO_DIR}/.venv"
-MODEL="qwen2.5vl:3b"
+MODEL="qwen3-vl:4b-instruct"  # same model as the Qualcomm IQ9 demo (Qwen3-VL-4B-Instruct)
 API_BASE="http://localhost:11434/v1"
 UI_PORT="8090"
-UI_URL="https://localhost:${UI_PORT}"
+# Optional first argument: the page to open once ready (default "/", the main
+# demo; "/traffic" for the detection cascade demo - same server, other page)
+UI_PATH="${1:-/}"
+UI_URL="https://localhost:${UI_PORT}${UI_PATH}"
 WEBUI_PATTERN="live-vlm-webui --port ${UI_PORT}"
 source "$REPO_DIR/scripts/demo_services.sh"
 

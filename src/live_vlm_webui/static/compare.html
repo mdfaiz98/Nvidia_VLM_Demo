@@ -1,0 +1,387 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Orin GPU vs IQ9 NPU: explainer + technical cheat sheet for the side-by-side
+demo, opened from the main demo's Settings and the /traffic settings drawer.
+Self-contained (no fonts or scripts from the internet) so it works offline.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orin GPU vs IQ9 NPU</title>
+    <link rel="icon" type="image/svg+xml" href="favicon/favicon.svg">
+    <style>
+        /* Layout: one reading column; board diagrams side by side (stacked on
+           narrow screens); tables scroll inside their own box. */
+        :root {
+            --bg: #F4F6F9;
+            --surface: #FFFFFF;
+            --fg: #16202C;
+            --muted: #5A6676;
+            --line: #D9DFE7;
+            --nvidia: #4E8A0E;
+            --nvidia-soft: #EAF3DF;
+            --qc: #2F5BD3;
+            --qc-soft: #E5ECFB;
+            --idle: #EEF0F3;
+            --idle-fg: #7E8897;
+            --warn: #9A5B00;
+            --warn-soft: #FFF3DC;
+            --header: #0B4F9C;
+            --font-body: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: ui-monospace, "SFMono-Regular", "DejaVu Sans Mono", Menlo, monospace;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg: #10151C; --surface: #18202A; --fg: #E5E9EF; --muted: #9AA5B4; --line: #2A3542;
+                --nvidia: #8BC34A; --nvidia-soft: #1D2A13; --qc: #7FA2FF; --qc-soft: #17223D;
+                --idle: #202935; --idle-fg: #6F7B8B; --warn: #F2B35B; --warn-soft: #2C2213;
+                --header: #0A3F7D; color-scheme: dark;
+            }
+        }
+        :root[data-theme="dark"] {
+            --bg: #10151C; --surface: #18202A; --fg: #E5E9EF; --muted: #9AA5B4; --line: #2A3542;
+            --nvidia: #8BC34A; --nvidia-soft: #1D2A13; --qc: #7FA2FF; --qc-soft: #17223D;
+            --idle: #202935; --idle-fg: #6F7B8B; --warn: #F2B35B; --warn-soft: #2C2213;
+            --header: #0A3F7D; color-scheme: dark;
+        }
+
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.55; }
+        .topbar { background: var(--header); color: #fff; padding: 14px 16px; }
+        .topbar-inner { max-width: 960px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .topbar b { font-size: 18px; }
+        .topbar nav { display: flex; gap: 8px; flex-wrap: wrap; }
+        .topbar a { color: #fff; text-decoration: none; font-size: 14px; border: 1px solid rgba(255,255,255,0.35); border-radius: 6px; padding: 5px 10px; }
+        .topbar a:hover, .topbar a:focus-visible { background: rgba(255,255,255,0.12); outline: none; }
+
+        .page { max-width: 960px; margin: 0 auto; padding: 28px 16px 64px; display: grid; gap: 36px; }
+        h1 { font-size: clamp(26px, 4vw, 34px); line-height: 1.15; margin: 0; text-wrap: balance; }
+        h2 { font-size: 21px; margin: 0; text-wrap: balance; }
+        h3 { font-size: 16px; margin: 0; }
+        p { margin: 0; max-width: 72ch; }
+        section { display: grid; gap: 14px; }
+        .lead { font-size: 18px; }
+        .muted { color: var(--muted); }
+        code { font-family: var(--font-mono); font-size: 0.88em; }
+        .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+        .toc { display: flex; flex-wrap: wrap; gap: 8px; }
+        .toc a { font-size: 14px; color: var(--fg); text-decoration: none; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
+        .toc a:hover, .toc a:focus-visible { border-color: var(--muted); outline: none; }
+
+        .callout { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; display: grid; gap: 8px; }
+        .callout.warn { background: var(--warn-soft); border-color: var(--warn); }
+        .callout.warn strong { color: var(--warn); }
+
+        .boards { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; }
+        .board { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+        .board .sub { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+        .unit { border-radius: 6px; padding: 9px 12px; display: grid; gap: 2px; background: var(--idle); color: var(--idle-fg); border: 1px dashed var(--line); font-size: 14px; }
+        .unit b { color: var(--fg); opacity: 0.75; font-weight: 600; }
+        .unit.nv { background: var(--nvidia-soft); border: 2px solid var(--nvidia); color: var(--fg); }
+        .unit.qc { background: var(--qc-soft); border: 2px solid var(--qc); color: var(--fg); }
+        .unit.nv b, .unit.qc b { opacity: 1; }
+        .tag { justify-self: start; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; color: var(--surface); }
+        .tag.nv { background: var(--nvidia); }
+        .tag.qc { background: var(--qc); }
+
+        ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 72ch; }
+
+        .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+        table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 14px; }
+        th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+        th { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+        tr:last-child td { border-bottom: 0; }
+        td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        tr.hl td { font-weight: 600; }
+        td.rowhead { color: var(--muted); white-space: nowrap; }
+        .note { font-size: 13px; color: var(--muted); max-width: 80ch; }
+
+        details { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; }
+        details + details { margin-top: -6px; }
+        summary { cursor: pointer; font-weight: 600; }
+        summary:focus-visible { outline: 2px solid var(--qc); outline-offset: 2px; }
+        details p, details ul { margin-top: 8px; }
+
+        pre { margin: 0; font-family: var(--font-mono); font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+
+        .diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 10px; }
+        .diagram-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .board-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+        .board-switch button { font: inherit; font-size: 13px; padding: 5px 12px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+        .board-switch button + button { border-left: 1px solid var(--line); }
+        .board-switch button[aria-pressed="true"] { background: var(--fg); color: var(--surface); }
+        .board-switch button:focus-visible { outline: 2px solid var(--qc); outline-offset: -2px; }
+        .diagram img { width: 100%; height: auto; display: block; border-radius: 4px; }
+        .diagram figcaption { font-size: 13px; color: var(--muted); }
+
+        footer { border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <div class="topbar-inner">
+            <b>Orin GPU vs IQ9 NPU</b>
+            <nav>
+                <a href="/">Main demo</a>
+                <a href="/traffic">Traffic demo</a>
+            </nav>
+        </div>
+    </div>
+
+    <div class="page">
+        <header style="display: grid; gap: 10px;">
+            <div class="eyebrow">Edge AI side-by-side &middot; Jetson AGX Orin 32GB vs Qualcomm IQ9 &middot; Oct 2026</div>
+            <h1>Why the VLM runs on the GPU on the AGX Orin, and on the NPU on the IQ9</h1>
+            <p class="lead">Both boards run the vision-language model on their main AI engine. That engine is a different kind of hardware on each board.</p>
+            <nav class="toc" aria-label="Sections">
+                <a href="#short">Short answer</a>
+                <a href="#where">Where it runs</a>
+                <a href="#diagrams">Diagrams</a>
+                <a href="#dla">Why not the DLA</a>
+                <a href="#results">Measured</a>
+                <a href="#cascade">Cascade demo</a>
+                <a href="#specs">Specs</a>
+                <a href="#stack">Software stack</a>
+                <a href="#faq">Likely questions</a>
+                <a href="#ops">Running the demo</a>
+            </nav>
+        </header>
+
+        <section id="short">
+            <div class="callout">
+                <h2>The short answer</h2>
+                <p>The AGX Orin has NPU-style accelerators (two NVIDIA DLAs), but they are built for convolutional vision networks such as YOLO and can't run a transformer like a VLM. NVIDIA put most of the Orin's AI compute into the GPU's Tensor Cores, so LLMs and VLMs run there. Qualcomm made the Hexagon NPU the IQ9's main AI engine and ships a compiler (QAIRT) that puts transformers on it, while its Adreno GPU is relatively weak for AI. So <b>IQ9 NPU vs Orin GPU</b> is a fair comparison: each board's best engine for the job.</p>
+            </div>
+            <div class="callout warn">
+                <strong>Know before you present</strong>
+                <ul>
+                    <li>Both boards run <b>Qwen3-VL-4B-Instruct</b> (4-bit). The Orin's live demo uses Ollama, which gives each frame ~4&times; more image detail than the IQ9 (~1,100 vs ~270 tokens): about 3.7 s per answer live, vs 2.3 s when the detail is matched.</li>
+                    <li>In the traffic demo the Orin's default detector is <b>YOLOv8n</b> (the IQ9 uses YOLO26n). On the highway video both find the same vehicles; YOLOv8n is faster on the DLA. YOLO26n is one click away in the traffic settings.</li>
+                    <li>Neither detector runs fully on the DLA: the final detection layers fall back to the GPU on both models (see below).</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="where">
+            <h2>Where the work runs on each board</h2>
+            <div class="boards">
+                <div class="board">
+                    <h3>NVIDIA Jetson AGX Orin 32GB</h3>
+                    <div class="sub">Advantech AFE-R750 &middot; Ampere GPU &middot; 2&times; DLA &middot; PVA &middot; 8-core Arm</div>
+                    <div class="unit nv"><b>Ampere GPU (1792 CUDA cores, 56 Tensor Cores)</b><span>Runs the VLM: image encoder, prompt and every generated word. Most of the board's TOPS.</span></div>
+                    <div class="unit nv"><b>2&times; DLA (Deep Learning Accelerator)</b><span>Traffic demo: runs the YOLO detector's backbone (shown as "NPU" in the demo). Can't run a VLM.</span></div>
+                    <div class="unit"><b>PVA (Programmable Vision Accelerator)</b><span>Idle. Classic computer vision, not neural networks.</span></div>
+                    <div class="unit"><b>8&times; Arm Cortex-A78AE</b><span>Web app, camera and video pipeline, image preparation.</span></div>
+                    <span class="tag nv">VLM on the GPU &middot; detector on the DLA</span>
+                </div>
+                <div class="board">
+                    <h3>Qualcomm IQ9 (QCS9075)</h3>
+                    <div class="sub">Advantech AFE-A503 &middot; Hexagon NPU &middot; Adreno 663 &middot; 8-core Kryo</div>
+                    <div class="unit qc"><b>Hexagon NPU</b><span>Runs the VLM through QAIRT (GenieX), including the image encoder, and the YOLO26n detector.</span></div>
+                    <div class="unit"><b>Adreno 663 GPU</b><span>Idle in the demo. Can run the VLM through llama.cpp, about 5&times; slower.</span></div>
+                    <div class="unit"><b>8&times; Kryo Gen 6</b><span>Web app, camera and video pipeline.</span></div>
+                    <span class="tag qc">VLM and detector on the NPU</span>
+                </div>
+            </div>
+        </section>
+
+        <section id="diagrams">
+            <h2>How it works: the two boards side by side</h2>
+            <p>Same app, same layout, drawn the same way for both boards. Switch between them to show what changes: only the orange AI boxes. Click a diagram to open it full size.</p>
+            <figure class="diagram" data-diagram="live-vlm-how-it-works">
+                <div class="diagram-head"><h3>Main demo: from a camera frame to a live answer</h3>
+                    <div class="board-switch" role="group" aria-label="Board"><button type="button" data-board="orin" aria-pressed="true">AGX Orin</button><button type="button" data-board="iq9" aria-pressed="false">IQ9</button></div></div>
+                <a href="/images/diagrams/orin-live-vlm-how-it-works.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-live-vlm-how-it-works.png" alt="Main demo diagram: camera feed or video file, frame sampling, prompt, Qwen3-VL-4B, live answer and metrics" loading="lazy"></a>
+                <figcaption>Orin: Qwen3-VL-4B on the Ampere GPU (Ollama, llama.cpp CUDA). IQ9: Qwen3-VL-4B on the Hexagon NPU (GenieX).</figcaption>
+            </figure>
+            <figure class="diagram" data-diagram="cascade-how-it-works">
+                <div class="diagram-head"><h3>Cascade: from camera to searchable vehicle records</h3>
+                    <div class="board-switch" role="group" aria-label="Board"><button type="button" data-board="orin" aria-pressed="true">AGX Orin</button><button type="button" data-board="iq9" aria-pressed="false">IQ9</button></div></div>
+                <a href="/images/diagrams/orin-cascade-how-it-works.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-cascade-how-it-works.png" alt="Cascade diagram: camera feed, YOLO detection, track and crop, Qwen3-VL-4B description, record to database and dashboard" loading="lazy"></a>
+                <figcaption>Orin: YOLOv8n on DLA 0, Qwen3-VL-4B on the GPU. IQ9: YOLO26n and Qwen3-VL-4B both on the NPU. The database, dashboard and operators show where a deployment would send the records.</figcaption>
+            </figure>
+            <figure class="diagram" data-diagram="demo-system">
+                <div class="diagram-head"><h3>Full system: every process and the engine it runs on</h3>
+                    <div class="board-switch" role="group" aria-label="Board"><button type="button" data-board="orin" aria-pressed="true">AGX Orin</button><button type="button" data-board="iq9" aria-pressed="false">IQ9</button></div></div>
+                <a href="/images/diagrams/orin-demo-system.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-demo-system.png" alt="Full system diagram: browser pages, web server processes, model server, and the AI engines" loading="lazy"></a>
+                <figcaption>Orin: Ollama and llama.cpp feed the GPU; TensorRT runs the detector on the DLA. IQ9: the GenieX proxy and server feed the NPU, which runs both models.</figcaption>
+            </figure>
+        </section>
+
+        <section id="dla">
+            <h2>Why a VLM can't run on the Orin's DLA</h2>
+            <p>The DLA is a fixed-function engine for convolutional networks. A VLM is a transformer and needs things the DLA doesn't support:</p>
+            <ul>
+                <li><b>Attention layers</b> and very large matrix multiplications.</li>
+                <li><b>A KV cache</b>: the model's memory of the text so far, which grows with every word.</li>
+                <li><b>Changing input sizes</b>: every prompt and answer has a different length; the DLA wants fixed shapes.</li>
+                <li><b>A limited layer set</b> (convolution, pooling, activations) in INT8 or FP16, compiled ahead of time with TensorRT, and a maximum tensor dimension of 8192.</li>
+            </ul>
+            <p>That's why every LLM/VLM runtime for Jetson (llama.cpp, Ollama, TensorRT-LLM, vLLM) uses the GPU. NVIDIA describes the DLA as a throughput and power-efficiency engine, not a lower-latency one; layers it can't run fall back to the GPU, and every switch costs time.</p>
+            <p>Qualcomm designed the Hexagon NPU as a general AI engine and ships QAIRT, which compiles transformer models for it. On the IQ9 the NPU processes the image and prompt about 20&times; faster than its CPU or GPU, which is where nearly all of its advantage comes from.</p>
+        </section>
+
+        <section id="results">
+            <h2>Measured: one VLM answer</h2>
+            <p>Same model family (Qwen3-VL-4B, 4-bit), same frame and prompt ("Describe what you see in this image. Answer in 1-2 sentences."), up to 128 tokens, temperature 0, image limited to about 256-270 tokens on both boards.</p>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Board &middot; engine &middot; runtime</th><th>Time per answer</th><th>First word after</th><th>Notes</th></tr></thead>
+                    <tbody>
+                        <tr class="hl"><td>IQ9 &middot; NPU &middot; QAIRT (GenieX), W4A16</td><td class="num">2.4 s</td><td class="num">0.63 s</td><td>The IQ9 demo setup. ~16 tok/s. CPU about 23% busy.</td></tr>
+                        <tr class="hl"><td>AGX Orin &middot; GPU &middot; llama.cpp (CUDA), Q4_K_M</td><td class="num">2.3 s</td><td class="num">not yet measured</td><td>Image tokens matched to the IQ9. GPU ~80% busy, ~17 W for the whole module. ~26 tok/s.</td></tr>
+                        <tr><td>AGX Orin &middot; GPU &middot; Ollama default, Q4_K_M</td><td class="num">3.7 s</td><td class="num">&ndash;</td><td>The live demo setup. Ollama processes ~4&times; more image detail (1,024+ tokens): slower, but reads small text better.</td></tr>
+                        <tr><td>AGX Orin &middot; GPU &middot; Ollama, Qwen2.5-VL-3B</td><td class="num">5.0 s</td><td class="num">&ndash;</td><td>The Orin demo's previous model, for reference. ~34 tok/s.</td></tr>
+                        <tr><td>IQ9 &middot; NPU &middot; llama.cpp, Q4_0</td><td class="num">9.0 s</td><td class="num">6.1 s</td><td>Same NPU, but llama.cpp runs the image encoder on the CPU.</td></tr>
+                        <tr><td>IQ9 &middot; GPU (Adreno) &middot; llama.cpp, Q4_0</td><td class="num">11.6 s</td><td class="num">7.2 s</td><td></td></tr>
+                        <tr><td>IQ9 &middot; CPU &middot; llama.cpp, Q4_0</td><td class="num">12.5 s</td><td class="num">10.2 s</td><td></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="note">IQ9: streamed, median of 3-5 runs (IQ9 benchmark, 19 Oct 2026). Orin: average of 3 runs, not streamed, same day, MAXN power mode with clocks locked. In the live demo both boards show TTFT, tok/s and latency in the output panel for every answer. 4-bit formats differ: Qualcomm's W4A16 (4-bit weights, 16-bit activations) vs llama.cpp's Q4_K_M (4-bit k-quant weights).</p>
+        </section>
+
+        <section id="cascade">
+            <h2>Measured: the traffic (cascade) demo detector</h2>
+            <p>A small detector finds vehicles in every frame; the VLM only describes the vehicle you click. On the Orin the detector can run on the DLA ("NPU"), the GPU or the CPU, switchable live in the traffic settings. Highway video, 1920&times;1080, 300 frames.</p>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Detector &middot; Orin unit</th><th>Model only</th><th>Per frame incl. pre/post</th><th>Video with detection</th><th>Vehicles / frame</th></tr></thead>
+                    <tbody>
+                        <tr class="hl"><td>YOLOv8n &middot; NPU (DLA 0), default</td><td class="num">18.8 ms</td><td class="num">25 ms</td><td class="num">~23 fps</td><td class="num">1.39</td></tr>
+                        <tr><td>YOLO26n &middot; NPU (DLA 0)</td><td class="num">26.3 ms</td><td class="num">33 ms</td><td class="num">~20 fps</td><td class="num">1.44</td></tr>
+                        <tr><td>YOLOv8n &middot; GPU</td><td class="num">2.6 ms</td><td class="num">9 ms</td><td class="num">~30 fps</td><td class="num">1.38</td></tr>
+                        <tr><td>YOLO26n &middot; GPU</td><td class="num">3.0 ms</td><td class="num">9.5 ms</td><td class="num">~30 fps</td><td class="num">1.43</td></tr>
+                        <tr><td>YOLOv8n &middot; CPU (ONNX Runtime)</td><td class="num">&ndash;</td><td class="num">82 ms</td><td class="num">~11 fps</td><td class="num">&ndash;</td></tr>
+                        <tr><td>YOLO26n &middot; CPU (ONNX Runtime)</td><td class="num">&ndash;</td><td class="num">63 ms</td><td class="num">~16 fps max</td><td class="num">&ndash;</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <ul>
+                <li><b>Why not fully on the DLA:</b> both models produce 8,400 candidate boxes, over the DLA's 8,192 limit, so the detection head runs on the GPU; the backbone and neck run on the DLA. YOLOv8's head moves less data back and forth, so it is ~25% faster on the DLA.</li>
+                <li><b>Why the GPU is fastest here:</b> a 3 ms model is too small for the DLA's power advantage to matter for latency; the DLA earns its place by leaving the GPU free for the VLM.</li>
+                <li><b>Describe a vehicle:</b> a few seconds per description with the VLM on the GPU (measured 1.8-5.5 s with Qwen2.5-VL-3B, e.g. "a white Ford Transit van&hellip; plate reads C98191P").</li>
+                <li>The IQ9 runs YOLO26n on its NPU at single-digit milliseconds per frame (from the IQ9 demo's notes; not measured here).</li>
+            </ul>
+        </section>
+
+        <section id="specs">
+            <h2>Board specs side by side</h2>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th></th><th>Advantech AFE-R750 (AGX Orin 32GB)</th><th>Advantech AFE-A503 (Qualcomm IQ9)</th></tr></thead>
+                    <tbody>
+                        <tr><td class="rowhead">AI performance</td><td>Up to 200 TOPS INT8 sparse (GPU + 2 DLA)</td><td>Hexagon NPU up to 100 TOPS dense / 200 TOPS sparse</td></tr>
+                        <tr><td class="rowhead">Main AI engine</td><td>Ampere GPU, 1792 cores, 56 Tensor Cores, up to 930 MHz</td><td>Hexagon NPU</td></tr>
+                        <tr><td class="rowhead">Other accelerators</td><td>2&times; NVDLA v2.0, PVA v2.0</td><td>Adreno 663 GPU, up to 800 MHz</td></tr>
+                        <tr><td class="rowhead">CPU</td><td>8&times; Arm Cortex-A78AE, up to 2.2 GHz</td><td>8&times; Kryo Gen 6, up to 2.36 GHz</td></tr>
+                        <tr><td class="rowhead">Memory</td><td>32 GB 256-bit LPDDR5, 204.8 GB/s (shared CPU/GPU)</td><td>36 GB LPDDR5, 3200 MHz</td></tr>
+                        <tr><td class="rowhead">Storage</td><td>64 GB eMMC 5.1 + M.2 M-Key 2280 (PCIe x4)</td><td>128 GB UFS + M.2 M-Key NVMe</td></tr>
+                        <tr><td class="rowhead">Power</td><td>15-40 W TDP (module power modes); 20-28 V DC in</td><td>28 W idle, 42 W max (system); 20-36 V DC in</td></tr>
+                        <tr><td class="rowhead">Measured during a VLM answer</td><td>~17 W module power (on-board INA3221 sensors)</td><td>No power sensor on the board; use a meter</td></tr>
+                        <tr><td class="rowhead">Ethernet</td><td>4&times; 2.5GbE (Intel i226)</td><td>4&times; 2.5GbE (i226 &times;3, RTL8221)</td></tr>
+                        <tr><td class="rowhead">Cameras</td><td>4 or 8&times; GMSL FAKRA (optional)</td><td>8&times; GMSL (optional)</td></tr>
+                        <tr><td class="rowhead">Industrial I/O</td><td>2&times; COM, 2&times; isolated CAN FD, 16-bit isolated DIO</td><td>2&times; COM, 2&times; isolated CAN / CAN FD, 16-bit isolated DIO</td></tr>
+                        <tr><td class="rowhead">OS</td><td>Ubuntu 22.04, JetPack 6 (L4T R36.4)</td><td>Ubuntu 24.04</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="note">Sources: Advantech AFE-R750 datasheet (12-Jun-2026, AGX Orin 32GB column), NVIDIA Jetson AGX Orin module specs, Advantech AFE-A503 datasheet (21-Aug-2026). The Platform panel (chip button on the main demo) shows the AFE-R750 specs with live values.</p>
+        </section>
+
+        <section id="stack">
+            <h2>Software stack</h2>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th></th><th>AGX Orin (this board)</th><th>IQ9</th></tr></thead>
+                    <tbody>
+                        <tr><td class="rowhead">VLM runtime</td><td>Ollama 0.35 (llama.cpp with CUDA); llama.cpp b11729 for the matched benchmark</td><td>GenieX on QAIRT (Qualcomm AI Runtime)</td></tr>
+                        <tr><td class="rowhead">VLM in the live demo</td><td>Qwen3-VL-4B-Instruct (qwen3-vl:4b-instruct), GGUF Q4_K_M, 100% on the GPU, ~5.7 GB</td><td>Qwen3-VL-4B-Instruct, W4A16, on the NPU</td></tr>
+                        <tr><td class="rowhead">Also installed</td><td>qwen2.5vl:3b, qwen2.5vl:7b, gemma4:12b (selectable in the demo)</td><td>&ndash;</td></tr>
+                        <tr><td class="rowhead">Detector runtime</td><td>TensorRT 10.3 (DLA or GPU, FP16); ONNX Runtime 1.23 for CPU</td><td>LiteRT with the QNN HTP delegate (NPU)</td></tr>
+                        <tr><td class="rowhead">Accelerator libraries</td><td>CUDA 12.6, cuDNN 9.3, TensorRT 10.3</td><td>QAIRT / QNN</td></tr>
+                        <tr><td class="rowhead">Web app</td><td colspan="2">Same Live VLM WebUI on both (Python aiohttp + WebRTC), streamed answers with TTFT / tok/s, same stats row and Platform panel</td></tr>
+                        <tr><td class="rowhead">Network</td><td colspan="2">Inference on the board: no cloud, images and answers stay on the device</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="faq">
+            <h2>Likely questions</h2>
+            <details>
+                <summary>Does the Orin have an NPU?</summary>
+                <p>It has two DLAs (Deep Learning Accelerators), NVIDIA's NPU-style engines, plus a PVA for classic vision. They run CNNs like YOLO, not transformers. The traffic demo labels the DLA "NPU" so the two boards line up; the main AI engine on the Orin is the GPU.</p>
+            </details>
+            <details>
+                <summary>Which board is faster?</summary>
+                <p>With the same model and the same image detail, one answer takes about the same time: 2.3 s on the Orin GPU vs 2.4 s on the IQ9 NPU. The IQ9's NPU gets the first word out sooner (0.63 s); the Orin's GPU writes the rest faster (~26 vs ~16 tokens/s). The Orin also has headroom for bigger models (8B-12B run on this board).</p>
+            </details>
+            <details>
+                <summary>Do both boards run the same models?</summary>
+                <p>The VLM is the same: Qwen3-VL-4B-Instruct on both, 4-bit (Qualcomm's W4A16 build on the IQ9, llama.cpp's Q4_K_M on the Orin). The detector differs: the Orin's traffic demo uses YOLOv8n by default because it suits the DLA better; YOLO26n, the IQ9's detector, gives the same detections on the highway video and can be selected live.</p>
+            </details>
+            <details>
+                <summary>How much power does it use?</summary>
+                <p>The Orin measures its own module power: about 17 W while answering a VLM request in MAXN mode (live in the Platform panel and the stats header). The module's power modes span 15-40 W. The IQ9 has no on-board power sensor, so its demo can't show a live figure.</p>
+            </details>
+            <details>
+                <summary>Why not run the VLM on the DLA to save power?</summary>
+                <p>The DLA can't run transformer layers (attention, KV cache, dynamic shapes); TensorRT would send nearly every layer back to the GPU. The DLA's job in a pipeline like the traffic demo is to take the detector off the GPU so the GPU stays free for the VLM.</p>
+            </details>
+            <details>
+                <summary>Is anything sent to the cloud?</summary>
+                <p>No. Camera frames, the model and the answers all stay on the board on both demos.</p>
+            </details>
+            <details>
+                <summary>Could the Orin be faster still?</summary>
+                <p>Likely, with NVIDIA's own stack: TensorRT-LLM or a TensorRT-built vision encoder, INT8/FP8 quantization, or the 64GB module (275 TOPS, 2048-core GPU). These demos use the generic llama.cpp/Ollama path. A newer TensorRT (10.7) would also allow INT8 for the YOLO26 detector.</p>
+            </details>
+        </section>
+
+        <section id="ops">
+            <h2>Running the demo on this board</h2>
+            <ul>
+                <li><b>Start:</b> desktop icon <b>VLM Demo + Cascade</b> (opens the main demo; the car button opens the traffic demo, the house button returns). <b>Stop:</b> icon <b>VLM Demo (Stop)</b>.</li>
+                <li><b>Traffic demo:</b> press <b>Start Detection</b>, then click a vehicle card to have it described. The detector (NPU / GPU / CPU, YOLOv8n or YOLO26n) is in the settings drawer.</li>
+                <li><b>Camera:</b> USB webcam (Trust Full HD, <code>/dev/video0</code>) is the default source in the main demo.</li>
+                <li>The page runs on <code>https://localhost:8090</code>; accept the self-signed certificate warning once.</li>
+            </ul>
+            <p>Useful commands in a terminal:</p>
+<pre>jtop                           # live CPU / GPU / DLA / power / temperatures
+nvpmodel -q                    # power mode (should say MAXN)
+ollama ps                      # which VLM is loaded (should be qwen3-vl:4b-instruct, 100% GPU)
+free -h                        # RAM: the GPU shares it, so loaded models count here
+tail -f ~/live-vlm-webui-cascade/run.log   # demo server log
+pkill firefox                  # if Firefox says it's already running</pre>
+            <p class="note">System updates are frozen until after the event (snaps held; snapd 2.77 breaks snaps on this kernel). The Hermes agent is switched off.</p>
+        </section>
+
+        <footer>
+            <div>Prepared for the IQ9 vs AGX Orin side-by-side, 19 October 2026. Numbers measured on these two boards that day.</div>
+            <div>Orin: Jetson AGX Orin 32GB in an Advantech AFE-R750, JetPack 6 (L4T R36.4), MAXN, clocks locked &middot; IQ9: Advantech AFE-A503 (QCS9075).</div>
+        </footer>
+    </div>
+    <script>
+        // Switch each diagram between the Orin and IQ9 versions
+        document.querySelectorAll('.diagram').forEach((fig) => {
+            const name = fig.dataset.diagram;
+            const img = fig.querySelector('img');
+            const link = fig.querySelector('a');
+            fig.querySelectorAll('.board-switch button').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    const src = `/images/diagrams/${btn.dataset.board}-${name}.png`;
+                    img.src = src;
+                    link.href = src;
+                    fig.querySelectorAll('.board-switch button').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+                });
+            });
+        });
+    </script>
+</body>
+</html>

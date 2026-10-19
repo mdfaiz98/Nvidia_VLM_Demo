@@ -31,11 +31,14 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 import uuid
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
+from pathlib import Path
 from typing import Optional
 
 import aiohttp
+import cv2
 from aiohttp import web
 from aiortc import (
     RTCConfiguration,
@@ -44,7 +47,10 @@ from aiortc import (
     RTCSessionDescription,
 )
 from aiortc.contrib.media import MediaRelay
+from PIL import Image
 
+from .detection_processor import DetectionVideoTrack
+from .detector import YoloDetector
 from .gpu_monitor import create_monitor
 from .orbbec_source import (
     OrbbecColorTrack,
@@ -72,6 +78,108 @@ websockets = set()  # Track active WebSocket connections (all)
 gpu_monitor = None  # GPU monitoring instance
 gpu_monitor_task = None  # Background task for GPU monitoring
 rtsp_tracks = {}  # Track active RTSP streams {session_id: (rtsp_track, processor_track)}
+
+# Detection cascade demo (/traffic) - deliberately separate from the normal
+# demo's session/VLM machinery above; see CLAUDE.md and
+# VLM_Cascade_Architecture_Plan.md for why this is a standalone page.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+# Default detector: YOLOv8n on DLA 0. Measured on the highway video it finds the
+# same vehicles as YOLO26n (the IQ9's model) but runs ~25% faster on the DLA
+# (25 vs 33 ms/frame), since YOLO26's end-to-end head moves more work between
+# the DLA and the GPU - both heads exceed the DLA's 8192 size limit and fall back.
+TRAFFIC_MODEL_PATH = _REPO_ROOT / "models" / "yolov8n_dla0_fp16.engine"
+TRAFFIC_LABELS_PATH = _REPO_ROOT / "models" / "coco_labels.txt"
+TRAFFIC_VIDEO_PATH = _REPO_ROOT / "demo_assets" / "car-highway.mp4"
+TRAFFIC_MODELS_DIR = _REPO_ROOT / "models"
+TRAFFIC_VIDEOS_DIR = _REPO_ROOT / "demo_assets"
+TRAFFIC_UPLOADS_DIR = TRAFFIC_VIDEOS_DIR / "uploads"
+# Entry zone per demo video (x1, y1, x2, y2 as fractions of the frame) - only
+# vehicles inside it are drawn and logged (see DetectionVideoTrack.entry_zone).
+# The parking clip's zone is the ground in front of the barrier: street traffic
+# behind it has box bottoms at y < 0.27, cars at/through the barrier at
+# y >= 0.3, and the car parked at the right edge sits at x > 0.9 (measured from
+# every detection in the clip). Videos not listed use the whole frame.
+TRAFFIC_ENTRY_ZONES = {
+    "parking-entrance-barrier.mp4": (0.15, 0.28, 0.80, 1.0),
+}
+TRAFFIC_VIDEO_NAMES = {
+    "car-highway.mp4": "Highway traffic",
+    "parking-entrance-barrier.mp4": "Parking entrance (barrier)",
+}
+yolo_detector = None  # The active detector - loaded at startup (TensorRT engine deserialize ~1s) - see on_startup
+# Settings drawer: every TensorRT .engine (DLA or GPU build) and every .onnx
+# (CPU, via ONNX Runtime) in models/ is selectable as the detection model, all
+# sharing coco_labels.txt. Loaded on first use, then kept so switching back is
+# instant.
+traffic_detectors = {}  # model file name -> YoloDetector
+traffic_detection_model_id = TRAFFIC_MODEL_PATH.name
+traffic_websockets = set()  # Track active WebSocket connections for the /traffic page
+# The single-worker detection executor (see detection_processor.py) means
+# multiple simultaneous /traffic connections serialize against each other
+# for the detector - if a reconnect creates a new connection before the old
+# one is torn down, both compete for that one worker, frame delivery stalls,
+# and WebRTC's own timeout closes the connection, triggering another
+# reconnect (observed as a rapid connect/disconnect loop that eventually
+# crashed the process). This is also just correct behavior for a
+# single-screen kiosk demo: only one active /traffic connection at a time.
+traffic_active_pc = None
+traffic_active_video_track = None
+traffic_active_processor_track = None  # the DetectionVideoTrack - see "toggle_detection"
+# Opening/closing PyAV video containers back-to-back with no gap was
+# observed to trigger a native heap-corruption crash ("munmap_chunk():
+# invalid pointer") - this enforces a minimum spacing between /traffic
+# connection setups server-side, independent of client behavior (a client
+# retrying aggressively, e.g. a stale browser tab still running old JS
+# without backoff, can't force the server back into that failure mode).
+traffic_last_offer_time = 0.0
+TRAFFIC_MIN_OFFER_INTERVAL_SECONDS = 2.0
+
+# Phase 3: click-to-caption. traffic_vlm_service is a dedicated VLMService
+# instance (separate lock state from the main demo's, but pointed at the
+# same Ollama server underneath) used only for per-vehicle captions,
+# never for continuous full-frame analysis. traffic_track_store retains each
+# reported vehicle's full-resolution crop (NOT the shrunk display thumbnail
+# broadcast to the panel) keyed by track id, since a click can arrive well
+# after tracker.py's own Track object has expired/been GC'd; capped and
+# FIFO-evicted so a long-running demo can't grow this unboundedly.
+traffic_vlm_service: Optional[VLMService] = None
+traffic_track_store: "OrderedDict[str, dict]" = OrderedDict()
+TRAFFIC_TRACK_STORE_MAX = 200
+# Describe prompts, one per kind of video: "default" (no entry zone - the
+# highway video, the original prompt) and "zone" (entry-zone videos - the
+# parking entrance).
+TRAFFIC_CAPTION_DEFAULT_PROMPT = (
+    "Describe this vehicle in 1-2 sentences: its color, type (car/truck/bus/etc.), "
+    "and brand if visible. Only mention the license plate if it is clearly legible - "
+    "don't guess at characters you can't read clearly."
+)
+# Plate on its own line, with an explicit "not readable" answer: with only
+# "don't guess" Qwen3-VL invented a plate for a car whose plate was behind the
+# parking barrier arm; with this wording it says "not readable" there, and
+# reads the plate (and brand) once the car is clear.
+TRAFFIC_CAPTION_PARKING_PROMPT = (
+    "Describe this vehicle in one sentence: color, type (car/SUV/van/truck/etc.) and brand "
+    "if visible. Then on a new line write 'Plate: ' followed by the license plate exactly as "
+    "shown, only if every character is clearly readable. If the plate is blocked, blurry, "
+    "cut off or partly hidden, write 'Plate: not readable'. Never guess."
+)
+TRAFFIC_CAPTION_DEFAULTS = {"default": TRAFFIC_CAPTION_DEFAULT_PROMPT, "zone": TRAFFIC_CAPTION_PARKING_PROMPT}
+# The active prompts - each editable at runtime from the /traffic page while a
+# video of that kind plays (see "update_prompt" in traffic_websocket_handler);
+# TRAFFIC_CAPTION_DEFAULTS stays fixed as the "Reset to default" targets.
+traffic_caption_prompts = dict(TRAFFIC_CAPTION_DEFAULTS)
+
+
+def traffic_prompt_mode() -> str:
+    """"zone" while an entry-zone video (parking) plays, else "default"."""
+    track = traffic_active_processor_track
+    return "zone" if track is not None and track.entry_zone is not None else "default"
+TRAFFIC_CAPTION_MAX_TOKENS = 120
+# Kept from the IQ9 demo, where a GenieX stall caused request pile-up; after a
+# failed caption, further requests wait this long instead of queueing up.
+TRAFFIC_CAPTION_FAILURE_COOLDOWN_SECONDS = 40.0
+traffic_caption_last_failure_at: Optional[float] = None
+traffic_caption_lock = asyncio.Lock()
 
 # Multi-session state (0.4.0)
 default_vlm_config = {}  # Set at startup; used to create new sessions
@@ -569,6 +677,474 @@ async def orbbec_ws(request):
     return ws
 
 
+async def guide_index(request):
+    """Serve the Orin demo guide (diagrams + technical details + troubleshooting,
+    static, offline), linked from the main demo's Settings and /traffic."""
+    content = open(os.path.join(os.path.dirname(__file__), "static", "guide.html"), "r").read()
+    return web.Response(content_type="text/html", text=content, headers={"Cache-Control": "no-store"})
+
+
+async def compare_index(request):
+    """Serve the Orin GPU vs IQ9 NPU explainer + cheat sheet (static, offline),
+    linked from the main demo's Settings and the /traffic settings drawer."""
+    content = open(os.path.join(os.path.dirname(__file__), "static", "compare.html"), "r").read()
+    return web.Response(content_type="text/html", text=content, headers={"Cache-Control": "no-store"})
+
+
+async def traffic_index(request):
+    """Serve the /traffic cascade demo page - separate from index.html."""
+    content = open(os.path.join(os.path.dirname(__file__), "static", "traffic.html"), "r").read()
+    return web.Response(content_type="text/html", text=content, headers={"Cache-Control": "no-store"})
+
+
+async def traffic_style(request):
+    """Serve the /traffic demo's stylesheet. See app_style() re: no-store."""
+    path = os.path.join(os.path.dirname(__file__), "static", "traffic.css")
+    content = open(path, "r").read()
+    return web.Response(content_type="text/css", text=content, headers={"Cache-Control": "no-store"})
+
+
+async def traffic_script(request):
+    """Serve the /traffic demo's JS. See app_style() re: no-store."""
+    path = os.path.join(os.path.dirname(__file__), "static", "traffic.js")
+    content = open(path, "r").read()
+    return web.Response(content_type="text/javascript", text=content, headers={"Cache-Control": "no-store"})
+
+
+def broadcast_traffic_detections(tracks, crops, crops_large, frame_width, frame_height):
+    """Send newly-confirmed vehicle sightings (with cropped thumbnails) to
+    all connected /traffic WebSocket clients - called once per vehicle, the
+    first time the tracker confirms it (see tracker.py), not once per frame.
+
+    Two display sizes are sent: a small "crop" for the panel list, and a
+    larger "crop_large" for the click-to-open detail modal - both are still
+    below the full-resolution crop the VLM itself analyzes (retained
+    separately in traffic_track_store), which is why the VLM can sometimes
+    make out detail (e.g. plate text) a viewer can't see in the modal."""
+    objects = [
+        {
+            "id": t.id,
+            "label": t.label,
+            "score": round(t.best_score, 3),
+            "bbox": list(t.best_bbox),
+            "crop": crop_b64,
+            "crop_large": crop_large_b64,
+        }
+        for t, crop_b64, crop_large_b64 in zip(tracks, crops, crops_large)
+    ]
+
+    for t in tracks:
+        traffic_track_store[t.id] = {
+            "label": t.label,
+            "score": t.best_score,
+            "best_crop": t.best_crop,  # full-res ndarray, not the shrunk thumbnail
+            # Entry-zone (parking) videos only: the tracker keeps refining
+            # t.best_crop after the card appears, and Describe uses that latest
+            # crop - see caption_traffic_vehicle. Other videos (the highway) send
+            # the crop as it was when the card appeared, as originally.
+            "track": t,
+            "mode": traffic_prompt_mode(),
+            "caption": None,
+            "caption_pending": False,
+        }
+        traffic_track_store.move_to_end(t.id)
+    while len(traffic_track_store) > TRAFFIC_TRACK_STORE_MAX:
+        traffic_track_store.popitem(last=False)
+
+    message = json.dumps({"type": "new_detections", "objects": objects})
+    for ws in list(traffic_websockets):
+        try:
+            asyncio.create_task(ws.send_str(message))
+        except Exception as e:
+            logger.error(f"Error broadcasting traffic detection: {e}")
+
+
+def broadcast_traffic_caption_status(track_id, status, caption=None):
+    """Send a caption_pending/caption_result/caption_error update for one
+    vehicle to all connected /traffic WebSocket clients."""
+    message = json.dumps({"type": "caption_status", "id": track_id, "status": status, "caption": caption})
+    for ws in list(traffic_websockets):
+        try:
+            asyncio.create_task(ws.send_str(message))
+        except Exception as e:
+            logger.error(f"Error broadcasting traffic caption status: {e}")
+
+
+async def caption_traffic_vehicle(track_id: str):
+    """Generate a VLM caption for one previously-detected vehicle's stored
+    crop, on demand (click-to-caption). Serialized via traffic_caption_lock
+    (one caption call at a time), with a short cooldown after a failure so
+    requests can't pile up behind a stalled one."""
+    global traffic_caption_last_failure_at
+
+    entry = traffic_track_store.get(track_id)
+    if entry is None:
+        logger.debug(f"[traffic] Caption requested for unknown/expired track {track_id}")
+        return
+    if entry["caption"] is not None or entry["caption_pending"]:
+        return  # already captioned or already in flight
+    if traffic_vlm_service is None:
+        broadcast_traffic_caption_status(track_id, "error", "Captioning unavailable")
+        return
+
+    if traffic_caption_last_failure_at is not None:
+        elapsed = time.time() - traffic_caption_last_failure_at
+        if elapsed < TRAFFIC_CAPTION_FAILURE_COOLDOWN_SECONDS:
+            logger.info(
+                f"[traffic] In cooldown after a recent VLM failure "
+                f"({elapsed:.0f}s / {TRAFFIC_CAPTION_FAILURE_COOLDOWN_SECONDS:.0f}s), "
+                f"skipping caption request for {track_id}"
+            )
+            broadcast_traffic_caption_status(track_id, "error", "Busy, try again shortly")
+            return
+
+    if traffic_caption_lock.locked():
+        broadcast_traffic_caption_status(track_id, "error", "Busy, try again shortly")
+        return
+
+    entry["caption_pending"] = True
+    broadcast_traffic_caption_status(track_id, "pending")
+
+    async with traffic_caption_lock:
+        try:
+            mode = entry["mode"]
+            crop = entry["best_crop"]
+            if mode == "zone" and entry["track"].best_crop is not None:
+                crop = entry["track"].best_crop
+            if crop is None or crop.size == 0:
+                entry["caption_pending"] = False
+                broadcast_traffic_caption_status(track_id, "error", "No image of this vehicle")
+                return
+            image = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+            caption = await traffic_vlm_service.analyze_image(image, prompt=traffic_caption_prompts[mode])
+            if caption.startswith("Error:"):
+                raise RuntimeError(caption)
+            entry["caption"] = caption
+            entry["caption_pending"] = False
+            broadcast_traffic_caption_status(track_id, "done", caption)
+        except Exception as e:
+            logger.error(f"[traffic] Caption failed for {track_id}: {e}")
+            traffic_caption_last_failure_at = time.time()
+            entry["caption_pending"] = False
+            broadcast_traffic_caption_status(track_id, "error", "Description failed")
+
+
+def traffic_list_detection_models():
+    """Selectable detection models, one per model and compute unit, e.g.
+    yolov8n_dla0_fp16.engine -> "YOLOv8n · NPU (DLA 0)", yolov8n_gpu_fp16.engine
+    -> "YOLOv8n · GPU", yolov8n.onnx -> "YOLOv8n · CPU". Listed per model in
+    NPU, GPU, CPU order, the default model first."""
+    unit_order = {"npu": 0, "gpu": 1, "cpu": 2}
+    models = []
+    for path in [*TRAFFIC_MODELS_DIR.glob("*.engine"), *TRAFFIC_MODELS_DIR.glob("*.onnx")]:
+        m = re.match(r"(yolo)(v?\d+)([nsmlx])", path.stem, re.IGNORECASE)
+        name = f"YOLO{m.group(2)}{m.group(3).lower()}" if m else path.stem
+        dla = re.search(r"dla(\d)", path.stem, re.IGNORECASE)
+        unit = "cpu" if path.suffix == ".onnx" else "npu" if dla else "gpu"
+        label = {"npu": f"NPU (DLA {dla.group(1) if dla else ''})", "gpu": "GPU", "cpu": "CPU"}[unit]
+        is_default_model = path.stem.split("_")[0] == TRAFFIC_MODEL_PATH.stem.split("_")[0]
+        models.append({"id": path.name, "name": f"{name} \u00b7 {label}",
+                       "_key": (not is_default_model, name, unit_order[unit])})
+    models.sort(key=lambda m: m.pop("_key"))
+    return models
+
+
+def traffic_get_detector(model_id: str) -> YoloDetector:
+    """Load (once) and return the detector for a models/ file. Blocking - call
+    via run_in_executor."""
+    if model_id not in traffic_detectors:
+        traffic_detectors[model_id] = YoloDetector(
+            model_path=str(TRAFFIC_MODELS_DIR / model_id),
+            labels_path=str(TRAFFIC_LABELS_PATH),
+        )
+    return traffic_detectors[model_id]
+
+
+def _video_files(folder: Path):
+    if not folder.is_dir():
+        return []
+    return [p for p in sorted(folder.iterdir()) if p.is_file() and p.suffix.lower() in ALLOWED_VIDEO_EXTENSIONS]
+
+
+def traffic_list_videos():
+    """Videos selectable as the /traffic source: the demo videos in
+    demo_assets/, then videos uploaded from the settings drawer
+    (demo_assets/uploads/ - kept apart from the main demo's upload folder)."""
+    videos = [
+        {"id": str(p), "name": TRAFFIC_VIDEO_NAMES.get(p.name, p.stem.replace("-", " ").capitalize())}
+        for p in _video_files(TRAFFIC_VIDEOS_DIR)
+    ]
+    videos += [{"id": str(p), "name": f"{p.name} (uploaded)"} for p in _video_files(TRAFFIC_UPLOADS_DIR)]
+    return videos
+
+
+async def traffic_upload(request):
+    """POST /api/traffic/upload (multipart field "file") - add a video to the
+    /traffic list, saved under its own (sanitized) name in demo_assets/uploads/."""
+    reader = await request.multipart()
+    field = await reader.next()
+    if field is None or field.name != "file":
+        return web.json_response({"error": "Expected a multipart field named 'file'"}, status=400)
+    original = field.filename or "video.mp4"
+    stem, ext = os.path.splitext(os.path.basename(original))
+    if ext.lower() not in ALLOWED_VIDEO_EXTENSIONS:
+        return web.json_response(
+            {"error": f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_VIDEO_EXTENSIONS))}"}, status=400
+        )
+    stem = re.sub(r"[^A-Za-z0-9._-]", "_", stem)[:60] or "video"
+    TRAFFIC_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    path, n = TRAFFIC_UPLOADS_DIR / f"{stem}{ext.lower()}", 2
+    while path.exists():  # never overwrite an earlier upload
+        path, n = TRAFFIC_UPLOADS_DIR / f"{stem}-{n}{ext.lower()}", n + 1
+    size = 0
+    with open(path, "wb") as f:
+        while chunk := await field.read_chunk(size=1024 * 1024):
+            size += len(chunk)
+            if size > MAX_VIDEO_UPLOAD_BYTES:
+                f.close()
+                path.unlink()
+                return web.json_response({"error": "File too large (max 2GB)"}, status=413)
+            f.write(chunk)
+    logger.info(f"[traffic] Video uploaded: {path} ({size} bytes)")
+    return web.json_response({"id": str(path), "name": f"{path.name} (uploaded)"})
+
+
+async def traffic_settings(request):
+    """GET /api/traffic/settings - options + current values for the settings drawer."""
+    vlm_models = []
+    if traffic_vlm_service is not None:
+        try:
+            listed = await traffic_vlm_service.client.models.list()
+            vlm_models = sorted({m.id for m in listed.data})
+        except Exception as e:
+            logger.warning(f"[traffic] Could not list VLM models: {e}")
+        if traffic_vlm_service.model not in vlm_models:
+            vlm_models.insert(0, traffic_vlm_service.model)
+    return web.json_response(
+        {
+            "detection_models": traffic_list_detection_models(),
+            "detection_model": traffic_detection_model_id,
+            "vlm_models": [{"id": m, "name": m.split("/")[-1]} for m in vlm_models],
+            "vlm_model": traffic_vlm_service.model if traffic_vlm_service else None,
+            "videos": traffic_list_videos(),
+            "default_video": str(TRAFFIC_VIDEO_PATH),
+        }
+    )
+
+
+async def traffic_set_detection_model(model_id: str):
+    """Switch the active detection model (settings drawer), live if streaming."""
+    global yolo_detector, traffic_detection_model_id
+    if model_id not in {m["id"] for m in traffic_list_detection_models()}:
+        return
+    try:
+        detector = await asyncio.get_event_loop().run_in_executor(None, traffic_get_detector, model_id)
+    except Exception as e:
+        logger.error(f"[traffic] Failed to load detection model {model_id}: {e}")
+        message = {"type": "settings_error", "text": f"Could not load {model_id}"}
+    else:
+        yolo_detector, traffic_detection_model_id = detector, model_id
+        if traffic_active_processor_track is not None:
+            traffic_active_processor_track.detector = detector
+        logger.info(f"[traffic] Detection model set to {model_id}")
+        message = {"type": "settings_updated", "detection_model": model_id}
+    for ws in list(traffic_websockets):
+        asyncio.create_task(ws.send_json(message))
+
+
+async def traffic_websocket_handler(request):
+    """WebSocket for the /traffic demo - detection results, plus pause/resume
+    control of the video source (see VideoFileTrack.pause/resume) and
+    editing the click-to-caption prompt. No per-session prompt/model
+    machinery like the main demo's /ws; that's the normal demo's concern."""
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    traffic_websockets.add(ws)
+    logger.info(f"Traffic WebSocket client connected, total: {len(traffic_websockets)}")
+
+    try:
+        await ws.send_json(
+            {
+                "type": "status",
+                "text": "Connected to traffic demo",
+                "prompt": traffic_caption_prompts[traffic_prompt_mode()],
+                "default_prompt": TRAFFIC_CAPTION_DEFAULTS[traffic_prompt_mode()],
+            }
+        )
+        async for msg in ws:
+            if msg.type == web.WSMsgType.TEXT:
+                try:
+                    data = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    continue
+                msg_type = data.get("type")
+                if msg_type in ("pause", "resume") and traffic_active_video_track:
+                    getattr(traffic_active_video_track, msg_type)()
+                elif msg_type == "toggle_detection" and traffic_active_processor_track:
+                    if data.get("enabled"):
+                        traffic_active_processor_track.enable_detection()
+                    else:
+                        traffic_active_processor_track.disable_detection()
+                elif msg_type == "request_caption":
+                    track_id = data.get("id")
+                    if track_id:
+                        asyncio.create_task(caption_traffic_vehicle(track_id))
+                elif msg_type == "set_detection_model":
+                    asyncio.create_task(traffic_set_detection_model(data.get("id", "")))
+                elif msg_type == "set_vlm_model" and traffic_vlm_service is not None:
+                    model_id = (data.get("id") or "").strip()
+                    if model_id:
+                        traffic_vlm_service.model = model_id
+                        logger.info(f"[traffic] VLM model set to {model_id}")
+                        for other_ws in list(traffic_websockets):
+                            asyncio.create_task(
+                                other_ws.send_json({"type": "settings_updated", "vlm_model": model_id})
+                            )
+                elif msg_type == "update_prompt":
+                    new_prompt = (data.get("prompt") or "").strip()
+                    if new_prompt:
+                        mode = traffic_prompt_mode()
+                        traffic_caption_prompts[mode] = new_prompt
+                        logger.info(f"[traffic] Caption prompt ({mode}) updated: {new_prompt!r}")
+                        for other_ws in list(traffic_websockets):
+                            try:
+                                asyncio.create_task(
+                                    other_ws.send_json(
+                                        {"type": "prompt_updated", "prompt": new_prompt}
+                                    )
+                                )
+                            except Exception as e:
+                                logger.error(f"Error broadcasting prompt update: {e}")
+            elif msg.type == web.WSMsgType.ERROR:
+                logger.error(f"Traffic WebSocket error: {ws.exception()}")
+    finally:
+        traffic_websockets.discard(ws)
+        logger.info(f"Traffic WebSocket client disconnected, total: {len(traffic_websockets)}")
+
+    return ws
+
+
+async def traffic_offer(request):
+    """Handle WebRTC offer for the /traffic cascade demo, wrapping the chosen
+    source video with object detection. The video (settings drawer) is any
+    file from traffic_list_videos(), looped (default: car-highway.mp4).
+    Kept deliberately separate from the normal demo's offer()/VLM flow (see
+    CLAUDE.md)."""
+    if yolo_detector is None:
+        return web.Response(
+            status=503,
+            content_type="application/json",
+            text=json.dumps(
+                {"error": "Detection model not available - check server startup logs"}
+            ),
+        )
+
+    global traffic_active_pc, traffic_active_video_track, traffic_active_processor_track, traffic_last_offer_time
+
+    # Rate-limit connection setup itself (see TRAFFIC_MIN_OFFER_INTERVAL_SECONDS
+    # comment above) - protects the server even if a client hammers this
+    # endpoint (e.g. a stale tab stuck retrying every few seconds).
+    now = time.monotonic()
+    elapsed = now - traffic_last_offer_time
+    if elapsed < TRAFFIC_MIN_OFFER_INTERVAL_SECONDS:
+        await asyncio.sleep(TRAFFIC_MIN_OFFER_INTERVAL_SECONDS - elapsed)
+    traffic_last_offer_time = time.monotonic()
+
+    # Close any existing /traffic connection first (see traffic_active_pc
+    # comment above) - a page reload should cleanly supersede the old
+    # connection, never run alongside it.
+    #
+    # NOTE: closing the old pc/video track synchronously here, immediately
+    # before opening a new VideoFileTrack on the same file, was observed to
+    # trigger a native heap-corruption crash ("munmap_chunk(): invalid
+    # pointer") under rapid reconnect churn - almost certainly a PyAV/libav
+    # thread-safety issue with tearing down and standing up decode contexts
+    # for the same file back-to-back with no gap. Stopping the old track and
+    # yielding back to the event loop before continuing gives its native
+    # cleanup a chance to finish first.
+    if traffic_active_pc is not None:
+        logger.info("[traffic] New connection superseding existing one - closing old first")
+        old_pc, old_track = traffic_active_pc, traffic_active_video_track
+        traffic_active_pc, traffic_active_video_track, traffic_active_processor_track = None, None, None
+        if old_track:
+            old_track.stop()
+        pcs.discard(old_pc)
+        await old_pc.close()
+        await asyncio.sleep(0.2)
+
+    params = await request.json()
+    offer_sdp = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+    video_path = params.get("video") or str(TRAFFIC_VIDEO_PATH)
+    if video_path not in {v["id"] for v in traffic_list_videos()}:
+        return web.json_response({"error": "Unknown video file"}, status=400)
+
+    config = RTCConfiguration(iceServers=[])
+    pc = RTCPeerConnection(configuration=config)
+    pcs.add(pc)
+    traffic_active_pc = pc
+
+    video_cleanup_track = None
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        global traffic_active_pc, traffic_active_video_track, traffic_active_processor_track
+        logger.info(f"[traffic] Connection state: {pc.connectionState}")
+        if pc.connectionState in ["failed", "closed"]:
+            if video_cleanup_track:
+                video_cleanup_track.stop()
+            await pc.close()
+            pcs.discard(pc)
+            if traffic_active_pc is pc:
+                traffic_active_pc = None
+                traffic_active_video_track = None
+                traffic_active_processor_track = None
+
+    try:
+        video_track = VideoFileTrack(video_path, loop=True)
+        video_cleanup_track = video_track
+        traffic_active_video_track = video_track
+    except Exception as e:
+        logger.error(f"[traffic] Failed to open demo video: {e}")
+        return web.Response(
+            status=500,
+            content_type="application/json",
+            text=json.dumps({"error": f"Failed to open demo video: {str(e)}"}),
+        )
+
+    # buffered=False: keep only the latest frame, don't queue every frame the
+    # relay pulls. DetectionVideoTrack does real per-frame work (DLA/GPU
+    # inference + drawing + re-encoding) that can run slightly behind 30fps,
+    # and the default buffered=True relay queue is unbounded - a backlog of
+    # stale frames would build up over time, and pause() would then have to
+    # drain that whole backlog (showing "old" motion) before actually
+    # freezing. Dropping stale frames instead is also just correct for a
+    # real-time low-latency pipeline like this one.
+    relayed_video = relay.subscribe(video_track, buffered=False)
+    processor_track = DetectionVideoTrack(
+        relayed_video, yolo_detector, detection_callback=broadcast_traffic_detections
+    )
+    processor_track.set_entry_zone(TRAFFIC_ENTRY_ZONES.get(Path(video_path).name))
+    if processor_track.entry_zone is not None:
+        # On a loop, the last car of one pass and the first car of the next sit
+        # in the same spot at the barrier - the tracker would take them for one
+        # car (already logged) and skip the new one. Videos without a zone (the
+        # highway) keep their original behaviour.
+        video_track.on_loop = processor_track.reset_tracker
+    traffic_active_processor_track = processor_track
+    pc.addTrack(processor_track)
+
+    await pc.setRemoteDescription(offer_sdp)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    logger.info("[traffic] Created answer for traffic demo peer connection")
+
+    return web.Response(
+        content_type="application/json",
+        text=json.dumps({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}),
+    )
+
+
 async def models(request):
     """Return available models from the VLM API"""
     try:
@@ -873,11 +1449,17 @@ def broadcast_text_update(text: str, metrics: dict):
 
 
 def broadcast_gpu_stats(stats: dict):
-    """Broadcast GPU stats to all connected WebSocket clients"""
-    if not websockets:
+    """Broadcast GPU stats to all connected WebSocket clients (main demo and /traffic)"""
+    if not websockets and not traffic_websockets:
         return
 
     message = json.dumps({"type": "gpu_stats", "stats": stats})
+
+    for ws in list(traffic_websockets):
+        try:
+            asyncio.create_task(ws.send_str(message))
+        except Exception as e:
+            logger.error(f"Error sending GPU stats to traffic websocket: {e}")
 
     # Send to all connected clients
     dead_websockets = set()
@@ -1385,11 +1967,14 @@ async def _stop_rtsp_session(session_id: str):
 
 async def on_startup(app):
     """Initialize resources on server startup"""
-    global gpu_monitor, gpu_monitor_task
+    global gpu_monitor, gpu_monitor_task, yolo_detector, traffic_vlm_service
 
     # Initialize GPU monitor
     try:
         gpu_monitor = create_monitor()
+        # DLA busy % for /traffic's telemetry: the detector's own inference time
+        # on the DLA (jtop has no DLA utilization counter), see YoloDetector.
+        gpu_monitor.dla_busy_source = lambda: YoloDetector.dla_busy_seconds
         logger.info("GPU monitor initialized")
     except Exception as e:
         logger.error(f"Failed to initialize GPU monitor: {e}")
@@ -1399,6 +1984,39 @@ async def on_startup(app):
     if gpu_monitor:
         gpu_monitor_task = asyncio.create_task(gpu_monitor_loop())
         logger.info("GPU monitoring task started")
+
+    # Load the /traffic cascade demo's detection model once at startup. A
+    # missing model/video only disables /traffic; it must never take down the
+    # normal demo.
+    if TRAFFIC_MODEL_PATH.exists() and TRAFFIC_LABELS_PATH.exists():
+        try:
+            yolo_detector = traffic_get_detector(TRAFFIC_MODEL_PATH.name)
+            logger.info("Traffic detection model loaded - /traffic demo ready")
+        except Exception as e:
+            logger.error(f"Failed to load traffic detection model: {e}")
+            yolo_detector = None
+    else:
+        logger.warning(
+            f"Traffic detection model not found at {TRAFFIC_MODEL_PATH} - "
+            "/traffic demo will be unavailable until it's built (see scripts/build_traffic_engines.sh)"
+        )
+        yolo_detector = None
+
+    # Dedicated VLM client for /traffic click-to-caption - same Ollama server
+    # as the main demo (default_vlm_config), but its own instance so its
+    # lock/busy state never interferes with the main demo's.
+    try:
+        traffic_vlm_service = VLMService(
+            model=default_vlm_config.get("model", "meta/llama-3.2-11b-vision-instruct"),
+            api_base=default_vlm_config.get("api_base", "http://localhost:8000/v1"),
+            api_key=default_vlm_config.get("api_key", "EMPTY"),
+            prompt=TRAFFIC_CAPTION_DEFAULT_PROMPT,
+            max_tokens=TRAFFIC_CAPTION_MAX_TOKENS,
+        )
+        logger.info("Traffic caption VLM service initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize traffic caption VLM service: {e}")
+        traffic_vlm_service = None
 
 
 async def on_shutdown(app):
@@ -1434,6 +2052,11 @@ async def on_shutdown(app):
     session_websockets.clear()
     ws_to_session.clear()
 
+    # Close /traffic demo websockets
+    for ws in list(traffic_websockets):
+        await ws.close()
+    traffic_websockets.clear()
+
     # Close all RTSP streams
     for session_id in list(rtsp_tracks.keys()):
         await _stop_rtsp_session(session_id)
@@ -1465,6 +2088,16 @@ async def create_app(test_mode=False):
     app.router.add_get("/models", models)
     app.router.add_get("/detect-services", detect_services)
     app.router.add_get("/api/platform", platform_info)
+    # /traffic cascade demo - separate page/pipeline from the normal demo above
+    app.router.add_get("/traffic", traffic_index)
+    app.router.add_get("/compare", compare_index)
+    app.router.add_get("/guide", guide_index)
+    app.router.add_get("/traffic.css", traffic_style)
+    app.router.add_get("/traffic.js", traffic_script)
+    app.router.add_get("/api/traffic/ws", traffic_websocket_handler)
+    app.router.add_post("/api/traffic/offer", traffic_offer)
+    app.router.add_get("/api/traffic/settings", traffic_settings)
+    app.router.add_post("/api/traffic/upload", traffic_upload)
     app.router.add_get("/ws", websocket_handler)
     app.router.add_post("/offer", offer)
 

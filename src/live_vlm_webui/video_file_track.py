@@ -57,6 +57,10 @@ class VideoFileTrack(VideoStreamTrack):
         super().__init__()
         self.file_path = file_path
         self.loop = loop
+        # Optional callback run each time the file loops back to the start
+        # (e.g. the /traffic parking demo clears its vehicle tracker so the
+        # last car of one pass isn't matched to the first car of the next).
+        self.on_loop = None
         self.container: Optional[av.container.InputContainer] = None
         self.stream: Optional[av.video.VideoStream] = None
         self._stopped = False
@@ -66,6 +70,16 @@ class VideoFileTrack(VideoStreamTrack):
         # (and therefore "playing") the file faster than its real duration
         self._playback_start_wallclock: Optional[float] = None
         self._first_frame_pts: Optional[int] = None
+
+        # Pause state - see pause()/resume(). While paused, recv() re-emits
+        # the last decoded frame instead of reading forward, so playback
+        # resumes from exactly where it was paused rather than jumping ahead
+        # to "now" (which is what merely pausing the <video> element client
+        # side would do, since the underlying stream keeps advancing
+        # regardless of whether the browser is rendering it).
+        self._paused = False
+        self._pause_started_at: Optional[float] = None
+        self._last_frame: Optional[VideoFrame] = None
 
         self.options = options or {}
 
@@ -114,6 +128,15 @@ class VideoFileTrack(VideoStreamTrack):
         if self._stopped:
             raise StopAsyncIteration
 
+        if self._paused and self._last_frame is not None:
+            # Hold at a reduced rate (not busy-looping, but frequent enough
+            # that the RTP stream stays alive and doesn't look stalled) -
+            # re-emit the same decoded frame with a fresh outgoing timestamp
+            # rather than decoding forward.
+            await asyncio.sleep(0.1)
+            self._last_frame.pts, self._last_frame.time_base = await self.next_timestamp()
+            return self._last_frame
+
         loop_asyncio = asyncio.get_event_loop()
         frame = await loop_asyncio.run_in_executor(None, self._read_frame)
 
@@ -121,6 +144,8 @@ class VideoFileTrack(VideoStreamTrack):
             if self.loop and not self._stopped:
                 logger.info("Video file reached end, looping back to start")
                 await loop_asyncio.run_in_executor(None, self._restart)
+                if self.on_loop:
+                    self.on_loop()
                 self._playback_start_wallclock = None
                 self._first_frame_pts = None
                 frame = await loop_asyncio.run_in_executor(None, self._read_frame)
@@ -139,6 +164,7 @@ class VideoFileTrack(VideoStreamTrack):
         # outbound stream's timeline continuous regardless of how many times
         # the underlying file has looped.
         frame.pts, frame.time_base = await self.next_timestamp()
+        self._last_frame = frame
 
         self._frame_count += 1
         if self._frame_count % 300 == 0:
@@ -200,6 +226,28 @@ class VideoFileTrack(VideoStreamTrack):
             except Exception:
                 pass
             self._connect()
+
+    def pause(self):
+        """Freeze playback at the current frame - recv() will hold and
+        re-emit it (see recv()) instead of decoding forward, until resume()."""
+        if not self._paused:
+            self._paused = True
+            self._pause_started_at = time.monotonic()
+            logger.info("Video file paused")
+
+    def resume(self):
+        """Resume playback from exactly the frame pause() froze on."""
+        if self._paused:
+            self._paused = False
+            if self._pause_started_at is not None and self._playback_start_wallclock is not None:
+                # Shift the pacing anchor forward by however long we were
+                # paused, so _pace_frame() doesn't see a big wall-clock gap
+                # and think it needs to fast-forward through the paused
+                # duration to "catch up".
+                paused_for = time.monotonic() - self._pause_started_at
+                self._playback_start_wallclock += paused_for
+            self._pause_started_at = None
+            logger.info("Video file resumed")
 
     def stop(self):
         """Stop playback and release the file handle."""

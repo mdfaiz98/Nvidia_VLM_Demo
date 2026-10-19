@@ -1,0 +1,339 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Demo guide for the AGX Orin: how each demo works (with diagrams), the
+technical details to quote, and troubleshooting. Opened from the main demo's
+Settings and the /traffic settings drawer. Self-contained so it works offline.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orin Demo Guide</title>
+    <link rel="icon" type="image/svg+xml" href="favicon/favicon.svg">
+    <style>
+        /* Layout: one reading column with a sticky section nav; diagrams full
+           column width; tables scroll inside their own box. */
+        :root {
+            --bg: #F4F6F9;
+            --surface: #FFFFFF;
+            --fg: #16202C;
+            --muted: #5A6676;
+            --line: #D9DFE7;
+            --nvidia: #4E8A0E;
+            --nvidia-soft: #EAF3DF;
+            --warn: #9A5B00;
+            --warn-soft: #FFF3DC;
+            --ok: #1F7A3A;
+            --header: #0B4F9C;
+            --link: #2E5AA8;
+            --font-body: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: ui-monospace, "SFMono-Regular", "DejaVu Sans Mono", Menlo, monospace;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg: #10151C; --surface: #18202A; --fg: #E5E9EF; --muted: #9AA5B4; --line: #2A3542;
+                --nvidia: #8BC34A; --nvidia-soft: #1D2A13; --warn: #F2B35B; --warn-soft: #2C2213;
+                --ok: #6CCB86; --header: #0A3F7D; --link: #8FB0FF; color-scheme: dark;
+            }
+        }
+        :root[data-theme="dark"] {
+            --bg: #10151C; --surface: #18202A; --fg: #E5E9EF; --muted: #9AA5B4; --line: #2A3542;
+            --nvidia: #8BC34A; --nvidia-soft: #1D2A13; --warn: #F2B35B; --warn-soft: #2C2213;
+            --ok: #6CCB86; --header: #0A3F7D; --link: #8FB0FF; color-scheme: dark;
+        }
+
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.55; }
+        a { color: var(--link); }
+        .topbar { background: var(--header); color: #fff; padding: 14px 16px; position: sticky; top: 0; z-index: 5; }
+        .topbar-inner { max-width: 1000px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .topbar b { font-size: 18px; }
+        .topbar nav { display: flex; gap: 8px; flex-wrap: wrap; }
+        .topbar a { color: #fff; text-decoration: none; font-size: 14px; border: 1px solid rgba(255,255,255,0.35); border-radius: 6px; padding: 5px 10px; }
+        .topbar a:hover, .topbar a:focus-visible { background: rgba(255,255,255,0.12); outline: none; }
+
+        .page { max-width: 1000px; margin: 0 auto; padding: 28px 16px 64px; display: grid; gap: 40px; }
+        h1 { font-size: clamp(26px, 4vw, 34px); line-height: 1.15; margin: 0; text-wrap: balance; }
+        h2 { font-size: 22px; margin: 0; text-wrap: balance; scroll-margin-top: 80px; }
+        h3 { font-size: 16px; margin: 0; }
+        p { margin: 0; max-width: 75ch; }
+        section { display: grid; gap: 14px; scroll-margin-top: 80px; }
+        code { font-family: var(--font-mono); font-size: 0.88em; }
+        .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+        .toc { display: flex; flex-wrap: wrap; gap: 8px; }
+        .toc a { font-size: 14px; color: var(--fg); text-decoration: none; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
+        .toc a:hover, .toc a:focus-visible { border-color: var(--muted); outline: none; }
+
+        .card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; display: grid; gap: 10px; }
+        .card.warn { background: var(--warn-soft); border-color: var(--warn); }
+        .card.warn h3 { color: var(--warn); }
+
+        ol, ul { margin: 0; padding-left: 22px; display: grid; gap: 6px; max-width: 78ch; }
+        .checklist { list-style: none; padding-left: 0; }
+        .checklist li { position: relative; padding-left: 30px; }
+        .checklist li::before { content: "\2610"; position: absolute; left: 0; top: -2px; color: var(--muted); font-size: 18px; }
+
+        figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+        figure img { width: 100%; height: auto; display: block; border-radius: 4px; }
+        figcaption { font-size: 13px; color: var(--muted); }
+
+        .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+        table { border-collapse: collapse; width: 100%; min-width: 600px; font-size: 14px; }
+        th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+        th { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+        tr:last-child td { border-bottom: 0; }
+        td.k { color: var(--muted); white-space: nowrap; width: 30%; }
+        td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        tr.hl td { font-weight: 600; }
+        .note { font-size: 13px; color: var(--muted); max-width: 85ch; }
+        .pill { display: inline-block; font-family: var(--font-mono); font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--nvidia-soft); color: var(--nvidia); border: 1px solid var(--nvidia); white-space: nowrap; }
+
+        details { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; }
+        summary { cursor: pointer; font-weight: 600; }
+        summary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+        details > *:not(summary) { margin-top: 8px; }
+
+        pre { margin: 0; font-family: var(--font-mono); font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+        footer { border-top: 1px solid var(--line); padding-top: 14px; font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <div class="topbar-inner">
+            <b>Orin Demo Guide</b>
+            <nav>
+                <a href="/">Main demo</a>
+                <a href="/traffic">Traffic demo</a>
+                <a href="/compare">Orin vs IQ9</a>
+            </nav>
+        </div>
+    </div>
+
+    <div class="page">
+        <header style="display: grid; gap: 10px;">
+            <div class="eyebrow">Advantech AFE-R750 &middot; Jetson AGX Orin 32GB &middot; EBV event, 20 Oct 2026</div>
+            <h1>How the demos work, and what to say about them</h1>
+            <p>Two demos run from one server on this board: the <b>Live VLM</b> main demo and the <b>traffic monitoring cascade</b>. Everything runs on the board; nothing goes to the cloud.</p>
+            <nav class="toc" aria-label="Sections">
+                <a href="#before">Before you start</a>
+                <a href="#main">Main demo</a>
+                <a href="#cascade">Cascade demo</a>
+                <a href="#system">Full system</a>
+                <a href="#numbers">Numbers to quote</a>
+                <a href="#hardware">Hardware</a>
+                <a href="#trouble">Troubleshooting</a>
+                <a href="#after">After the event</a>
+            </nav>
+        </header>
+
+        <section id="before">
+            <h2>Before you start</h2>
+            <ul class="checklist">
+                <li>Start the demo with the desktop icon <b>VLM Demo + Cascade</b>. It opens the main demo at <code>https://localhost:8090</code> (accept the self-signed certificate once).</li>
+                <li>Power mode is <b>MAXN</b> with clocks locked: the launcher does this once per boot and may ask for the sudo password.</li>
+                <li>The VLM is <code>qwen3-vl:4b-instruct</code> on the GPU: check with <code>ollama ps</code> (should show <i>100% GPU</i>). The first answer after a pause of more than 30 minutes takes a few extra seconds while the model loads.</li>
+                <li>The USB webcam (Trust Full HD, <code>/dev/video0</code>) is the default video source. Only one program can use it at a time.</li>
+                <li>The stats panel shows a live GPU % and a GPU clock. If it is stuck at 0%, see <a href="#trouble">Troubleshooting</a>.</li>
+                <li>Free RAM: <code>free -h</code> should show around 12 GB or more available. The GPU shares the 32 GB, so every loaded model counts.</li>
+                <li>No other test or benchmark servers are running; Hermes is off; system updates are frozen until after the event.</li>
+            </ul>
+        </section>
+
+        <section id="main">
+            <h2>Main demo: Live VLM</h2>
+            <figure>
+                <a href="/images/diagrams/orin-live-vlm-how-it-works.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-live-vlm-how-it-works.png" alt="Main demo: camera feed or video file, frame sampling, prompt, Qwen3-VL-4B on the Ampere GPU, streamed answer and live metrics"></a>
+                <figcaption>Click to open full size.</figcaption>
+            </figure>
+            <div class="card">
+                <h3>How it works</h3>
+                <ol>
+                    <li><b>Camera feed</b>: the server reads the USB camera (or GMSL / RTSP / a video file) and streams it to the page over WebRTC.</li>
+                    <li><b>Frame sampling</b>: every 30th frame (about one per second) is shrunk to at most 1024 px and sent as a JPEG.</li>
+                    <li><b>Prompt</b>: a preset (Scene, Objects, Safety, Retail, Navigation, &hellip;) or your own text, plus an answer-length limit.</li>
+                    <li><b>Qwen3-VL-4B on the Ampere GPU</b> looks at the frame and writes the answer. One frame at a time: frames that arrive while it is busy are skipped.</li>
+                    <li><b>Answer</b> streams into the VLM Output panel word by word, with TTFT, speed and latency, plus CPU / RAM / GPU / temperature stats below.</li>
+                </ol>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Setting</th><th>Value on this board</th></tr></thead>
+                    <tbody>
+                        <tr><td class="k">Model</td><td>Qwen3-VL-4B-Instruct (<code>qwen3-vl:4b-instruct</code>), same as the IQ9</td></tr>
+                        <tr><td class="k">Format</td><td>GGUF, Q4_K_M (4-bit weights), ~5.7 GB in memory with the image encoder</td></tr>
+                        <tr><td class="k">Runtime</td><td>Ollama 0.35 &rarr; llama.cpp server with CUDA, 100% on the Ampere GPU</td></tr>
+                        <tr><td class="k">Endpoint</td><td><code>http://localhost:11434/v1</code> (OpenAI-compatible API)</td></tr>
+                        <tr><td class="k">Image per frame</td><td>&le;1024 px, JPEG quality 90; Ollama turns it into ~1,000-1,100 image tokens</td></tr>
+                        <tr><td class="k">Generation</td><td>temperature 0.2, up to 512 tokens, default answer length 1-2 sentences</td></tr>
+                        <tr><td class="k">Frame interval</td><td>every 30th frame (changeable in the Video Source panel)</td></tr>
+                        <tr><td class="k">Other models</td><td>Switch live in <i>Model Selection</i>: qwen2.5vl:3b, qwen2.5vl:7b, gemma4:12b. Bigger models use more of the shared 32 GB.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card">
+                <h3>What the numbers on screen mean</h3>
+                <ul>
+                    <li><b>TTFT</b> (time to first token): from sending the frame until the first word arrives. Mostly image processing ("prefill").</li>
+                    <li><b>Speed</b> (tok/s): how fast the model writes once it has started. Limited by memory bandwidth.</li>
+                    <li><b>Tokens</b>: length of the last answer. <b>Latency</b>: the whole answer, end to end. <b>Avg</b> / <b>Count</b>: running average and number of answers.</li>
+                    <li><b>AI Accelerator &middot; GPU</b>: GPU load and clock (930 MHz max). <b>Thermal</b>: CPU, GPU and SoC temperatures.</li>
+                    <li>The <b>chip button</b> in the header opens the Platform panel: AFE-R750 datasheet, live board stats, module power, and the AI stack.</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="cascade">
+            <h2>Cascade demo: traffic monitoring</h2>
+            <figure>
+                <a href="/images/diagrams/orin-cascade-how-it-works.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-cascade-how-it-works.png" alt="Cascade: camera feed, YOLOv8n on DLA 0, track and crop, Qwen3-VL-4B on the GPU, vehicle record"></a>
+                <figcaption>The database, dashboard and operators on the right show where a real deployment would send the records; the demo shows the vehicle cards and descriptions. Click to open full size.</figcaption>
+            </figure>
+            <div class="card">
+                <h3>How to run it</h3>
+                <ol>
+                    <li>In the main demo, click the <b>car</b> button. The highway video starts playing.</li>
+                    <li>Press <b>Start Detection</b>. Boxes appear on vehicles, and each new vehicle gets a card on the right.</li>
+                    <li>Click a vehicle card, then <b>Describe</b>: the VLM reads color, type, brand and, if readable, the plate from the vehicle's best crop.</li>
+                    <li>Open the settings drawer (gear) to switch the detector between NPU (DLA), GPU and CPU live, or to change the VLM.</li>
+                    <li>The <b>house</b> button goes back to the main demo.</li>
+                </ol>
+            </div>
+            <div class="card">
+                <h3>Why a cascade</h3>
+                <p>A small, fast detector looks at every frame; the large VLM only looks at the vehicles you ask about. That keeps the VLM's seconds per answer out of the video loop, and lets each model run on the engine that suits it: the detector on the DLA, the VLM on the GPU.</p>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Detector option (settings)</th><th>Runs on</th><th>Per frame</th><th>Video with detection</th></tr></thead>
+                    <tbody>
+                        <tr class="hl"><td>YOLOv8n &middot; NPU (DLA 0) <span class="pill">default</span></td><td>DLA via TensorRT FP16; detection head on the GPU</td><td class="num">~25 ms</td><td class="num">~23 fps</td></tr>
+                        <tr><td>YOLOv8n &middot; GPU</td><td>Ampere GPU via TensorRT FP16</td><td class="num">~9 ms</td><td class="num">~30 fps</td></tr>
+                        <tr><td>YOLOv8n &middot; CPU</td><td>8&times; Cortex-A78AE via ONNX Runtime</td><td class="num">~82 ms</td><td class="num">~11 fps</td></tr>
+                        <tr><td>YOLO26n &middot; NPU / GPU / CPU</td><td>the IQ9's detector, same three options</td><td class="num">~33 / 9.5 / 63 ms</td><td class="num">~20 / 30 / 16 fps</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <ul>
+                <li><b>Why YOLOv8n is the default:</b> on the highway video it finds the same vehicles as YOLO26n (1.39 vs 1.44 per frame) and is ~25% faster on the DLA.</li>
+                <li><b>Why not 100% on the DLA:</b> both models produce 8,400 candidate boxes, over the DLA's 8,192 limit, so the final detection layers run on the GPU; the backbone and neck run on the DLA.</li>
+                <li><b>Why the GPU is faster here:</b> the model is tiny (~3 ms of GPU time). The DLA's value is taking the detector off the GPU so the GPU stays free for the VLM, at lower power.</li>
+                <li><b>Describe settings:</b> up to 120 tokens; prompt "Describe this vehicle in 1-2 sentences: its color, type (car/truck/bus/etc.), and brand if visible. Only mention the license plate if it is clearly legible"; editable with the <i>Prompt</i> button. One description at a time.</li>
+                <li>Only vehicles are reported (car, truck, bus, motorcycle); confidence threshold 0.45.</li>
+            </ul>
+        </section>
+
+        <section id="system">
+            <h2>Full system: what runs where</h2>
+            <figure>
+                <a href="/images/diagrams/orin-demo-system.png" target="_blank" rel="noopener"><img src="/images/diagrams/orin-demo-system.png" alt="Full system: browser pages, web server processes, Ollama and llama-server, YOLOv8n on DLA 0, Qwen3-VL-4B on the GPU"></a>
+                <figcaption>Click to open full size.</figcaption>
+            </figure>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>Process / service</th><th>Port</th><th>Runs on</th><th>Role</th></tr></thead>
+                    <tbody>
+                        <tr><td>Live VLM WebUI (Python, aiohttp + aiortc)</td><td class="num">8090 (https)</td><td>CPU</td><td>Both pages, camera, WebRTC, frame sampling, detection tracking, VLM client, stats</td></tr>
+                        <tr><td>YOLO detector (TensorRT / ONNX Runtime)</td><td class="num">&ndash;</td><td>DLA 0 / GPU / CPU</td><td>Runs inside the WebUI process on its own thread</td></tr>
+                        <tr><td>Ollama</td><td class="num">11434</td><td>CPU (host side)</td><td>Model server, OpenAI-compatible API; keeps the model loaded for 30 min</td></tr>
+                        <tr><td>llama-server (llama.cpp, started by Ollama)</td><td class="num">random local</td><td>Ampere GPU</td><td>Runs Qwen3-VL-4B with CUDA</td></tr>
+                        <tr><td>jtop service</td><td class="num">&ndash;</td><td>CPU</td><td>GPU load, clocks, power, temperatures for the stats panel</td></tr>
+                        <tr><td>Grafana / Prometheus / jetson exporter</td><td class="num">3000 / 9090 / 9101</td><td>CPU</td><td>Detailed monitoring dashboard (chart button next to Local System Stats)</td></tr>
+                        <tr><td>Firefox</td><td class="num">&ndash;</td><td>CPU</td><td>Shows the pages</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="numbers">
+            <h2>Numbers to quote</h2>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>What</th><th>AGX Orin</th><th>IQ9</th></tr></thead>
+                    <tbody>
+                        <tr class="hl"><td>One VLM answer, Qwen3-VL-4B, image detail matched (~270 tokens)</td><td class="num">2.3 s (GPU)</td><td class="num">2.4 s (NPU)</td></tr>
+                        <tr><td>Generation speed, same setup</td><td class="num">~26 tok/s</td><td class="num">~16 tok/s</td></tr>
+                        <tr><td>Time to first word, same setup</td><td class="num">not measured yet</td><td class="num">0.63 s</td></tr>
+                        <tr><td>One VLM answer as in the live demo (Ollama, ~1,100 image tokens)</td><td class="num">~3.7 s</td><td class="num">&ndash;</td></tr>
+                        <tr><td>Module power while answering</td><td class="num">~17 W (on-board sensors)</td><td class="num">no sensor</td></tr>
+                        <tr><td>Detector per frame (default)</td><td class="num">~25 ms YOLOv8n on DLA</td><td class="num">~15 ms YOLO26n on NPU (IQ9 docs)</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="note">Measured 19 Oct 2026 on these boards. Orin: MAXN, clocks locked, average of 3 runs. IQ9: its own benchmark (streamed, median). The live demo shows TTFT, tok/s and latency for every answer, so the audience sees real numbers.</p>
+        </section>
+
+        <section id="hardware">
+            <h2>Hardware in one table</h2>
+            <div class="table-wrap">
+                <table>
+                    <tbody>
+                        <tr><td class="k">Box</td><td>Advantech AFE-R750 (AFE-R750-X2A1U), AMR control system</td></tr>
+                        <tr><td class="k">Module</td><td>NVIDIA Jetson AGX Orin 32GB</td></tr>
+                        <tr><td class="k">AI performance</td><td>Up to 200 TOPS INT8 sparse (GPU + 2 DLA)</td></tr>
+                        <tr><td class="k">GPU</td><td>1792-core Ampere, 56 Tensor Cores, up to 930 MHz</td></tr>
+                        <tr><td class="k">Accelerators</td><td>2&times; NVDLA v2.0 ("NPU" in the demo), PVA v2.0</td></tr>
+                        <tr><td class="k">CPU</td><td>8&times; Arm Cortex-A78AE, up to 2.2 GHz</td></tr>
+                        <tr><td class="k">Memory</td><td>32 GB 256-bit LPDDR5, 204.8 GB/s, shared by CPU and GPU</td></tr>
+                        <tr><td class="k">Storage</td><td>64 GB eMMC 5.1 + M.2 2280 NVMe slot</td></tr>
+                        <tr><td class="k">Power</td><td>15-40 W TDP; 20-28 V DC input</td></tr>
+                        <tr><td class="k">I/O</td><td>HDMI 2.0, 4&times; 2.5GbE, 4&times; USB 3.2, 2&times; COM, 2&times; isolated CAN FD, 16-bit isolated DIO, optional 4/8&times; GMSL</td></tr>
+                        <tr><td class="k">Software</td><td>Ubuntu 22.04, JetPack 6 (L4T R36.4), CUDA 12.6, cuDNN 9.3, TensorRT 10.3</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="trouble">
+            <h2>Troubleshooting</h2>
+            <details>
+                <summary>GPU % stuck at 0 (while the model is clearly working)</summary>
+                <p>The stats lost their connection to the jtop service. The demo reconnects by itself within ~5 seconds; if it doesn't, restart the demo: <b>VLM Demo (Stop)</b>, then <b>VLM Demo + Cascade</b>. Check the real value with <code>jtop</code> or <code>tegrastats</code>.</p>
+            </details>
+            <details>
+                <summary>Answers are slow, or the board feels sluggish</summary>
+                <p>Check memory with <code>free -h</code> and loaded models with <code>ollama ps</code>. Only <code>qwen3-vl:4b-instruct</code> should be loaded. Unload others with <code>ollama stop &lt;model&gt;</code>. The first answer after 30 minutes idle is slower while the model loads.</p>
+            </details>
+            <details>
+                <summary>Traffic video stutters</summary>
+                <p>Switch the detector to <b>YOLOv8n &middot; GPU</b> in the traffic settings (full 30 fps). The DLA default runs at ~23 fps.</p>
+            </details>
+            <details>
+                <summary>No camera image in the main demo</summary>
+                <p>Check the Video Source panel is on <b>Webcam</b> with the Trust Full HD Webcam selected. Close any other program using the camera (Cheese, another browser tab). <code>v4l2-ctl --list-devices</code> lists the cameras.</p>
+            </details>
+            <details>
+                <summary>Firefox says it is already running</summary>
+                <p>Run <code>pkill firefox</code> and start the demo again. Firefox is a snap; snap updates are on hold, so it won't change before the event.</p>
+            </details>
+            <details>
+                <summary>The page doesn't load</summary>
+                <p>Check the server: <code>tail -f ~/live-vlm-webui-cascade/run.log</code>. Restart with the desktop icons. Accept the certificate warning at <code>https://localhost:8090</code>.</p>
+            </details>
+            <pre>jtop                      # live CPU / GPU / power / temperatures
+tegrastats                # the same from NVIDIA, one line per second
+nvpmodel -q               # power mode (should say MAXN)
+ollama ps                 # loaded model, should be qwen3-vl:4b-instruct, 100% GPU
+free -h                   # RAM; the GPU shares it
+tail -f ~/live-vlm-webui-cascade/run.log   # demo server log</pre>
+        </section>
+
+        <section id="after">
+            <h2>After the event</h2>
+            <ul>
+                <li>Turn updates back on with <code>sudo snap refresh --unhold</code>, but keep snapd held: snapd 2.77 breaks every snap on this kernel.</li>
+                <li>Turn the Hermes agent back on: <code>systemctl --user enable --now hermes-gateway</code>.</li>
+                <li>Still to do: measure the Orin's time to first word in the matched setup (the IQ9's <code>bench_vlm.py</code> method).</li>
+            </ul>
+        </section>
+
+        <footer>
+            <div>Prepared 19 October 2026 for the IQ9 vs AGX Orin side-by-side. Numbers measured on these boards that day.</div>
+            <div>Diagrams drawn with the same generator and style as the IQ9 demo's; the IQ9 versions are on the <a href="/compare#diagrams">Orin vs IQ9</a> page.</div>
+        </footer>
+    </div>
+</body>
+</html>

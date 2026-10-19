@@ -26,6 +26,7 @@ import psutil
 import re
 import socket
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, List
 from collections import deque
@@ -367,6 +368,24 @@ class GPUMonitor(ABC):
         self.cpu_temp_history = deque(maxlen=history_size)
         self.gpu_temp_history = deque(maxlen=history_size)
         self.soc_temp_history = deque(maxlen=history_size)
+        self.dla_util_history = deque(maxlen=history_size)
+        # Optional () -> cumulative seconds the DLA has spent on our own work
+        # (the /traffic detector, see server.on_startup). jtop has no DLA
+        # utilization counter, so DLA busy % is that time over wall time.
+        self.dla_busy_source = None
+        self._dla_last_sample: Optional[tuple] = None
+
+    def dla_percent(self) -> Optional[float]:
+        """DLA busy % since the previous call, from dla_busy_source; None
+        until the detector has used the DLA at least once."""
+        if self.dla_busy_source is None:
+            return None
+        now, busy = time.monotonic(), self.dla_busy_source()
+        last, self._dla_last_sample = self._dla_last_sample, (now, busy)
+        if last is None or busy == 0:
+            return None
+        elapsed = now - last[0]
+        return round(min(100.0, max(0.0, (busy - last[1]) / elapsed * 100)), 1) if elapsed > 0 else None
 
     @abstractmethod
     def get_stats(self) -> Dict:
@@ -438,6 +457,7 @@ class GPUMonitor(ABC):
         self.cpu_temp_history.append(stats.get("cpu_temp_c"))
         self.gpu_temp_history.append(stats.get("gpu_temp_c"))
         self.soc_temp_history.append(stats.get("soc_temp_c"))
+        self.dla_util_history.append(stats.get("dla_percent"))
 
     def get_history(self) -> Dict[str, List[float]]:
         """Get historical data as lists"""
@@ -451,6 +471,7 @@ class GPUMonitor(ABC):
             "cpu_temp": list(self.cpu_temp_history),
             "gpu_temp": list(self.gpu_temp_history),
             "soc_temp": list(self.soc_temp_history),
+            "dla_util": list(self.dla_util_history),
         }
 
 
@@ -1251,6 +1272,8 @@ class JetsonOrinMonitor(GPUMonitor):
             self.jtop_instance.start()
             self.use_jtop = True
             self.available = True
+            self._jtop_last_time = None
+            self._jtop_last_change = time.monotonic()
             logger.info("Jetson Orin monitoring initialized - using jtop (jetson_stats)")
         except ImportError:
             logger.warning(
@@ -1258,6 +1281,37 @@ class JetsonOrinMonitor(GPUMonitor):
             )
         except Exception as e:
             logger.warning(f"jtop initialization failed: {e}")
+
+    # jtop's sample timestamp normally advances every ~0.5 s; if it stands still
+    # this long, the connection to the jtop service has died
+    JTOP_STALE_SECONDS = 5.0
+
+    def _reconnect_jtop_if_stale(self) -> None:
+        """Reopen the jtop connection when its data stops updating. Seen after
+        the board ran out of memory: the jtop service closed this client's
+        update thread, and the old stats (e.g. GPU 0%) were reported forever,
+        while a fresh client got live data."""
+        sample_time = (self.jtop_instance.stats or {}).get("time")
+        now = time.monotonic()
+        if sample_time != self._jtop_last_time:
+            self._jtop_last_time, self._jtop_last_change = sample_time, now
+            return
+        if now - self._jtop_last_change < self.JTOP_STALE_SECONDS:
+            return
+        logger.warning("jtop data stopped updating - reconnecting to the jtop service")
+        try:
+            self.jtop_instance.close()
+        except Exception:
+            pass
+        try:
+            from jtop import jtop
+
+            self.jtop_instance = jtop()
+            self.jtop_instance.start()
+            logger.info("jtop reconnected")
+        except Exception as e:
+            logger.error(f"jtop reconnect failed: {e}")
+        self._jtop_last_time, self._jtop_last_change = None, time.monotonic()
 
     def get_stats(self) -> Dict:
         """Get current GPU stats for Jetson Orin"""
@@ -1277,6 +1331,7 @@ class JetsonOrinMonitor(GPUMonitor):
         # Use jtop for stats
         if self.use_jtop and self.jtop_instance:
             try:
+                self._reconnect_jtop_if_stale()
                 # Check if jtop is actually connected and has data
                 if not hasattr(self.jtop_instance, "stats") or self.jtop_instance.stats is None:
                     logger.warning("jtop stats not available - jtop may not be connected properly")
@@ -1503,6 +1558,7 @@ class JetsonOrinMonitor(GPUMonitor):
                     "power_rails": power_rails,
                     "emc_percent": emc_percent,
                     "gpu_freq_mhz": get_jetson_gpu_freq_mhz(),
+                    "dla_percent": self.dla_percent(),
                     "board_name": board_name,
                     **system_stats,
                 }

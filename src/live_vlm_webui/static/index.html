@@ -52,6 +52,9 @@ limitations under the License.
         </div>
         <div class="header-right">
             <span class="status-badge disconnected" id="connectionStatus">Disconnected</span>
+            <a class="settings-btn" href="/traffic" title="Cascade demo (Traffic Monitoring)" aria-label="Cascade demo">
+                <i data-lucide="car"></i>
+            </a>
             <a href="/depth" class="settings-btn" id="depthPageLink" title="Open Depth Camera page">
                 <i data-lucide="box"></i>
             </a>
@@ -112,8 +115,28 @@ limitations under the License.
                 <button class="settings-close" id="settingsClose">×</button>
             </div>
             <div class="settings-body">
-                <!-- Column 1: Layout & Visual Effects -->
+                <!-- Column 1: Comparison, Layout & Visual Effects -->
                 <div>
+                    <div class="settings-section">
+                        <div class="settings-section-title">Demo Guide &amp; Comparison</div>
+
+                        <div class="settings-item">
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="settings-item-label">Demo guide</div>
+                                <div class="settings-item-description">How both demos work (diagrams), technical details, numbers to quote, troubleshooting</div>
+                            </div>
+                            <a class="btn btn-secondary" href="/guide" target="_blank" rel="noopener" style="width: auto; flex: 0 0 auto; text-decoration: none; white-space: nowrap; padding: 6px 16px;">Open</a>
+                        </div>
+
+                        <div class="settings-item">
+                            <div style="flex: 1; min-width: 0;">
+                                <div class="settings-item-label">Orin GPU vs IQ9 NPU</div>
+                                <div class="settings-item-description">Why each board runs the AI where it does, measured results, specs side by side, likely questions</div>
+                            </div>
+                            <a class="btn btn-secondary" href="/compare" target="_blank" rel="noopener" style="width: auto; flex: 0 0 auto; text-decoration: none; white-space: nowrap; padding: 6px 16px;">Open</a>
+                        </div>
+                    </div>
+
                     <div class="settings-section">
                         <div class="settings-section-title">Layout</div>
 

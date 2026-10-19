@@ -82,3 +82,7 @@ tests/e2e/.test-data/
 cert.pem
 key.pem
 *.pem
+
+# Detection cascade (/traffic): TensorRT engines + labels, and the demo videos
+models/
+demo_assets/

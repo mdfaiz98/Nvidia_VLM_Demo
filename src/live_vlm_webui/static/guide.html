@@ -180,7 +180,8 @@ Settings and the /traffic settings drawer. Self-contained so it works offline.
                     <li><b>TTFT</b> (time to first token): from sending the frame until the first word arrives. Mostly image processing ("prefill").</li>
                     <li><b>Speed</b> (tok/s): how fast the model writes once it has started. Limited by memory bandwidth.</li>
                     <li><b>Tokens</b>: length of the last answer. <b>Latency</b>: the whole answer, end to end. <b>Avg</b> / <b>Count</b>: running average and number of answers.</li>
-                    <li><b>AI Accelerator &middot; GPU</b>: GPU load and clock (930 MHz max). <b>Thermal</b>: CPU, GPU and SoC temperatures.</li>
+                    <li><b>AI Accelerators</b>: the <b>GPU</b> ring (load and clock, 930 MHz max) runs the VLM. The <b>DLA</b> ring is the Orin's NPU-style engine: it shows 0% "free for vision models" in the main demo, and moves ("traffic detector") when you start detection on the traffic page with the default NPU detector. Talking point: the IQ9 runs everything on its one NPU; the Orin runs the VLM on the GPU and still has two DLAs free.</li>
+                    <li><b>Thermal</b>: CPU, GPU and SoC temperatures.</li>
                     <li>The <b>chip button</b> in the header opens the Platform panel: AFE-R750 datasheet, live board stats, module power, and the AI stack.</li>
                 </ul>
             </div>

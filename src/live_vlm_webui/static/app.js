@@ -848,7 +848,7 @@
             {
                 selector: '#systemStatsCard',
                 title: 'Local System Stats',
-                body: 'Live on-device telemetry: CPU and RAM utilization, GPU load (the GPU runs the VLM on this board), plus CPU / GPU / SoC temperatures over time.'
+                body: 'Live on-device telemetry: CPU and RAM utilization, GPU load (the GPU runs the VLM on this board) and DLA load (the Orin\u2019s NPU-style engine: free for vision models, busy when the traffic detector runs on it), plus CPU / GPU / SoC temperatures over time.'
             },
             {
                 selector: '#controlDrawer',
@@ -1916,12 +1916,18 @@
                 productImg.style.display = 'none';
             }
 
-            // AI accelerator - the GPU, which runs the VLM on this board (the IQ9 uses its NPU)
+            // AI accelerators - the GPU runs the VLM on this board (the IQ9 uses its NPU);
+            // the DLA is free for vision models, or busy while /traffic's detector uses it
             const gpuPercent = stats.gpu_percent || 0;
-            updateMetricText(document.getElementById('gpuUtil'), `${gpuPercent.toFixed(1)}%`);
+            updateMetricText(document.getElementById('gpuUtil'), `${gpuPercent.toFixed(0)}%`);
             updateMetricText(document.getElementById('gpuFreq'),
                 stats.gpu_freq_mhz != null ? `${stats.gpu_freq_mhz.toFixed(0)} MHz` : '-- MHz');
             setRingProgress('gpuRing', gpuPercent, 263.9);
+            const dlaPercent = stats.dla_percent || 0;
+            updateMetricText(document.getElementById('dlaUtil'), `${dlaPercent.toFixed(0)}%`);
+            updateMetricText(document.getElementById('dlaRole'),
+                dlaPercent >= 1 ? 'traffic detector' : 'free for vision models');
+            setRingProgress('dlaRing', dlaPercent, 263.9);
 
             // Thermal (CPU / GPU / SoC) - current values
             const fmtTemp = (t) => (t === null || t === undefined) ? 'N/A' : `${t.toFixed(1)}°C`;
@@ -1964,7 +1970,10 @@
 
                 drawSparkline(canvases.cpu, stats.history.cpu_util, themeColor('--thermal-cpu'));
                 drawSparkline(canvases.ram, stats.history.ram_used, themeColor('--accent-color-2'));
-                drawSparkline(canvases.accel, stats.history.gpu_util, themeColor('--thermal-igpu'));
+                drawMultiSparkline(canvases.accel, [
+                    { data: stats.history.gpu_util, color: themeColor('--thermal-igpu') },
+                    { data: (stats.history.dla_util || []).map(v => v || 0), color: themeColor('--thermal-npu') },
+                ], { min: 0, max: 100 });
                 drawMultiSparkline(canvases.thermal, [
                     { data: stats.history.cpu_temp, color: themeColor('--thermal-cpu') },
                     { data: stats.history.gpu_temp, color: themeColor('--thermal-igpu') },

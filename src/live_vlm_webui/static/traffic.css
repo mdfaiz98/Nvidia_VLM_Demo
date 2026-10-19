@@ -636,37 +636,3 @@
     padding: 8px 12px;
     font-size: var(--font-sm);
 }
-
-/* Accelerators card: GPU / DLA busy, two compact rings side by side (the main
-   page's stylesheet only has the single GPU ring) */
-.accel-card {
-    min-width: 280px;
-}
-
-.accel-rings {
-    display: flex;
-    justify-content: space-around;
-    gap: var(--space-2);
-}
-
-.accel-ring {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.ring-gauge-wrapper.accel {
-    width: 72px;
-    height: 72px;
-}
-
-.stat-value.accel-value {
-    font-size: var(--font-md);
-}
-
-/* No warning colour on the DLA ring: it sits high while the detector runs,
-   which is normal, not a problem */
-.ring-fill.npu,
-.ring-fill.npu.high {
-    stroke: var(--thermal-npu);
-}

@@ -2366,7 +2366,46 @@ limitations under the License.
             stroke: var(--warning-color);
         }
 
-        /* AI Accelerator card: the GPU ring plus a caption saying it runs the VLM */
+        /* AI Accelerators card (main page and /traffic): GPU and DLA, two compact
+           rings side by side with captions saying what each runs */
+        .accel-card {
+            min-width: 280px;
+        }
+
+        .accel-rings {
+            display: flex;
+            justify-content: space-around;
+            gap: var(--space-2);
+        }
+
+        .accel-ring {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .ring-gauge-wrapper.accel {
+            width: 72px;
+            height: 72px;
+        }
+
+        .stat-value.accel-value {
+            font-size: var(--font-md);
+        }
+
+        /* No warning colour on the DLA ring: it sits high while the detector runs,
+           which is normal, not a problem */
+        .ring-fill.npu,
+        .ring-fill.npu.high {
+            stroke: var(--thermal-npu);
+        }
+
+        .accel-caption.accel-role {
+            text-transform: none;
+            letter-spacing: 0;
+            margin-top: -2px;
+        }
+
         .accel-caption {
             font-family: var(--font-mono);
             font-size: 10px;

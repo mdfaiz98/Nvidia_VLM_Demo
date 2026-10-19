@@ -758,23 +758,48 @@ After commands, explain: obstacles detected, clearance margins, goal inference, 
                         <canvas id="ramSparkline" class="sparkline"></canvas>
                     </div>
 
-                    <!-- Accelerator + Thermal: same row as the Qualcomm IQ9 demo, so the two boards
-                         read side by side. Here the VLM runs on the GPU (the IQ9's runs on its NPU). -->
+                    <!-- Accelerators + Thermal: same row as the Qualcomm IQ9 demo, so the two boards
+                         read side by side. Here the VLM runs on the GPU (the IQ9's runs on its NPU);
+                         the DLA ring shows the Orin's NPU-style engine free for vision models, or
+                         busy while the /traffic detector runs on it. -->
                     <div class="stat-card accel-card" id="accelCard">
                         <div class="stat-header">
-                            <span class="stat-label">AI Accelerator &middot; GPU</span>
-                        </div>
-                        <div class="ring-gauge-wrapper" title="Ampere GPU load, all programs (desktop, browser, this app) - from jtop. The VLM runs here.">
-                            <svg class="ring-gauge" viewBox="0 0 100 100">
-                                <circle class="ring-track" cx="50" cy="50" r="42"></circle>
-                                <circle class="ring-fill gpu" id="gpuRing" cx="50" cy="50" r="42"
-                                        stroke-dasharray="263.9" stroke-dashoffset="263.9"></circle>
-                            </svg>
-                            <div class="ring-center-text">
-                                <span class="stat-value" id="gpuUtil">--%</span>
+                            <span class="stat-label">AI Accelerators</span>
+                            <div class="thermal-legend">
+                                <span class="thermal-legend-item"><span class="thermal-legend-swatch" style="background:var(--thermal-igpu);"></span>GPU</span>
+                                <span class="thermal-legend-item"><span class="thermal-legend-swatch" style="background:var(--thermal-npu);"></span>DLA</span>
                             </div>
                         </div>
-                        <div class="accel-caption">Ampere GPU &middot; <span id="gpuFreq">-- MHz</span> &middot; runs the VLM</div>
+                        <div class="accel-rings">
+                            <div class="accel-ring" title="Ampere GPU load, all programs (desktop, browser, this app) - from jtop. The VLM runs here.">
+                                <div class="ring-gauge-wrapper accel">
+                                    <svg class="ring-gauge" viewBox="0 0 100 100">
+                                        <circle class="ring-track" cx="50" cy="50" r="42"></circle>
+                                        <circle class="ring-fill gpu" id="gpuRing" cx="50" cy="50" r="42"
+                                                stroke-dasharray="263.9" stroke-dashoffset="263.9"></circle>
+                                    </svg>
+                                    <div class="ring-center-text">
+                                        <span class="stat-value accel-value" id="gpuUtil">--%</span>
+                                    </div>
+                                </div>
+                                <div class="accel-caption">GPU &middot; <span id="gpuFreq">-- MHz</span></div>
+                                <div class="accel-caption accel-role">runs the VLM</div>
+                            </div>
+                            <div class="accel-ring" title="DLA (Deep Learning Accelerator), the Orin's NPU-style engine. It runs CNNs such as YOLO, not transformers, so the VLM can't use it. Busy % is the traffic detector's own time on DLA 0 (the DLA has no readable utilization counter).">
+                                <div class="ring-gauge-wrapper accel">
+                                    <svg class="ring-gauge" viewBox="0 0 100 100">
+                                        <circle class="ring-track" cx="50" cy="50" r="42"></circle>
+                                        <circle class="ring-fill npu" id="dlaRing" cx="50" cy="50" r="42"
+                                                stroke-dasharray="263.9" stroke-dashoffset="263.9"></circle>
+                                    </svg>
+                                    <div class="ring-center-text">
+                                        <span class="stat-value accel-value" id="dlaUtil">--%</span>
+                                    </div>
+                                </div>
+                                <div class="accel-caption">DLA (NPU) &middot; 2 cores</div>
+                                <div class="accel-caption accel-role" id="dlaRole">free for vision models</div>
+                            </div>
+                        </div>
                         <canvas id="accelChart" class="sparkline"></canvas>
                     </div>
 

@@ -353,7 +353,7 @@ limitations under the License.
                 <div class="panel-content" id="cameraConfig">
                     <!-- Input Source Tabs -->
                     <div class="input-source-tabs">
-                        <button class="input-source-tab" data-source="webcam">
+                        <button class="input-source-tab active" data-source="webcam">
                             <i data-lucide="video" style="width: 14px; height: 14px; margin-right: 4px;"></i>
                             Webcam
                         </button>
@@ -366,14 +366,14 @@ limitations under the License.
                             <i data-lucide="file-video" style="width: 14px; height: 14px; margin-right: 4px;"></i>
                             Video File
                         </button>
-                        <button class="input-source-tab active" data-source="orbbec" title="Orbbec depth camera's Color stream, over GMSL (no separate webcam on this device)">
+                        <button class="input-source-tab" data-source="orbbec" title="Orbbec depth camera's Color stream, over GMSL (no separate webcam on this device)">
                             <i data-lucide="scan" style="width: 14px; height: 14px; margin-right: 4px;"></i>
                             GMSL Camera
                         </button>
                     </div>
 
                     <!-- Webcam Controls -->
-                    <div id="webcamControls" style="display: none;">
+                    <div id="webcamControls">
                         <div class="form-group">
                             <label>Camera Selection</label>
                             <select id="cameraSelect">
@@ -416,7 +416,7 @@ limitations under the License.
                     </div>
 
                     <!-- Orbbec Controls - no URL/file needed, just Start -->
-                    <div id="orbbecControls">
+                    <div id="orbbecControls" style="display: none;">
                         <div class="form-group">
                             <div class="input-hint" style="margin-bottom: 12px;">
                                 Uses the Orbbec depth camera's Color stream. Depth/IR and full camera telemetry are on the <a href="/depth" target="_blank">Depth Camera page</a>.
